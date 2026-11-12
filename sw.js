@@ -1,5 +1,5 @@
-// Service worker: la app funciona sin conexión (excepto la lectura con IA).
-const VERSION = 'ritmo-v0.2.0';
+﻿// Service worker: la app funciona sin conexiÃ³n (excepto la lectura con IA).
+const VERSION = 'ritmo-v0.3.0';
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/styles.css',
   './js/app.js', './js/store.js', './js/data.js', './js/format.js', './js/budget.js',
@@ -22,9 +22,9 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
-  if (url.hostname === 'api.anthropic.com') return; // nunca se guarda en caché
+  if (url.hostname === 'api.anthropic.com') return; // nunca se guarda en cachÃ©
 
-  // Archivos propios: red primero (para ver cambios), caché si no hay conexión.
+  // Archivos propios: red primero (para ver cambios), cachÃ© si no hay conexiÃ³n.
   if (url.origin === self.location.origin) {
     event.respondWith(
       fetch(request).then((res) => {
@@ -36,7 +36,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Fuentes y librerías de CDN: caché primero.
+  // Fuentes y librerÃ­as de CDN: cachÃ© primero.
   if (/fonts\.(googleapis|gstatic)\.com|cdn\.jsdelivr\.net|cdnjs\.cloudflare\.com/.test(url.hostname)) {
     event.respondWith(
       caches.match(request).then((cached) => cached || fetch(request).then((res) => {

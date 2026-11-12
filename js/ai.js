@@ -79,7 +79,7 @@ function schema() {
         items: {
           type: 'object',
           additionalProperties: false,
-          required: ['fecha', 'comercio', 'descripcion', 'monto', 'moneda', 'tipo', 'categoria', 'metodo_pago', 'confianza', 'pregunta', 'opciones'],
+          required: ['fecha', 'comercio', 'descripcion', 'monto', 'moneda', 'tipo', 'categoria', 'metodo_pago', 'ultimos_digitos', 'confianza', 'pregunta', 'opciones'],
           properties: {
             fecha: { type: 'string', description: 'Fecha en formato AAAA-MM-DD' },
             comercio: { type: 'string', description: 'Nombre legible del comercio o concepto' },
@@ -89,6 +89,7 @@ function schema() {
             tipo: { type: 'string', enum: ['gasto', 'ingreso', 'transferencia', 'pago_tarjeta'] },
             categoria: { type: 'string', enum: categoryIds },
             metodo_pago: { type: 'string', enum: [...methods, 'ninguno'], description: 'Uno de los medios de pago de la persona, o "ninguno" si no se deduce' },
+            ultimos_digitos: { type: 'string', description: 'Últimos 4 dígitos de la tarjeta o cuenta si se ven en el documento (solo números); vacío si no se ven' },
             confianza: { type: 'string', enum: ['alta', 'baja'] },
             pregunta: { type: 'string', description: 'Pregunta corta para la persona si la confianza es baja; vacía si no' },
             opciones: { type: 'array', items: { type: 'string', enum: categoryIds }, description: '2 o 3 categorías posibles si hay duda' },
@@ -123,6 +124,7 @@ ${cats}
 - metodo_pago: estos son los medios de pago de la persona:
 ${methods || '(no tiene medios configurados)'}
 ${account ? `La persona indicó que estos archivos son de "${account}": úsalo para todos los movimientos salvo que el documento diga claramente otra cosa.` : 'Elige el que corresponda según el banco, el tipo de tarjeta o los últimos dígitos que se vean. Si no se puede deducir, usa "ninguno".'}
+- ultimos_digitos: si el documento muestra los últimos dígitos de la tarjeta o cuenta (por ejemplo ****4532 o terminación 4532), escríbelos aunque no coincidan con ningún medio de la persona. No inventes dígitos.
 - Algunas partes de las imágenes pueden estar tapadas con recuadros negros a propósito: ignóralas.`;
 }
 
@@ -196,7 +198,10 @@ export async function extractWithAI(files, mode, onStep = () => {}, { account = 
   } catch {
     throw new AiError('La respuesta de la IA no se pudo interpretar.');
   }
-  for (const m of result.movimientos || []) if (m.metodo_pago === 'ninguno') m.metodo_pago = '';
+  for (const m of result.movimientos || []) {
+    if (m.metodo_pago === 'ninguno') m.metodo_pago = '';
+    m.ultimos_digitos = String(m.ultimos_digitos || '').replace(/\D/g, '').slice(-4);
+  }
   return result;
 }
 
@@ -375,17 +380,20 @@ export async function extractDemo(files, mode, onStep = () => {}, { account = ''
   const methods = paymentMethods();
   const card = account || methods.find((x) => x.type === 'credito')?.name || '';
   const debit = methods.find((x) => x.type === 'debito' || x.type === 'cuenta')?.name || '';
-  const base = { moneda: cur, metodo_pago: card, pregunta: '', opciones: [], confianza: 'alta', tipo: 'gasto' };
+  const known = methods.find((x) => x.name === card)?.last4 || '';
+  const base = { moneda: cur, metodo_pago: card, ultimos_digitos: known, pregunta: '', opciones: [], confianza: 'alta', tipo: 'gasto' };
+  // Una tarjeta que la persona no tiene registrada, para mostrar el aviso de tarjeta nueva.
+  const unknown = { metodo_pago: '', ultimos_digitos: '3391' };
   if (mode === 'receipt') {
     return { nota: '', movimientos: [{ ...base, fecha: d(0), comercio: 'Soriana Híper', descripcion: 'SORIANA HIPER SUC 118 · TOTAL', monto: m(1284.6), categoria: 'supermercado', metodo_pago: debit }] };
   }
   const list = [
     { fecha: d(0), comercio: 'OXXO', descripcion: 'OXXO PALMAS 1182', monto: m(87), categoria: 'supermercado' },
-    { fecha: d(1), comercio: 'Cinépolis', descripcion: 'CINEPOLIS ONLINE', monto: m(312), categoria: 'entretenimiento' },
+    { fecha: d(1), comercio: 'Cinépolis', descripcion: 'CINEPOLIS ONLINE', monto: m(312), categoria: 'entretenimiento', ...unknown },
     { fecha: d(1), comercio: 'DiDi', descripcion: 'DIDI RIDES MX', monto: m(96.5), categoria: 'transporte' },
     { fecha: d(2), comercio: 'Farmacias del Ahorro', descripcion: 'FARM AHORRO 0921', monto: m(245), categoria: 'salud' },
     { fecha: d(2), comercio: 'MP*TIENDITA', descripcion: 'MERCADOPAGO*TIENDITA', monto: m(158), categoria: 'supermercado', confianza: 'baja', pregunta: '¿“MP*TIENDITA” es una compra de súper o de algo para la casa?', opciones: ['supermercado', 'hogar', 'otros'] },
-    { fecha: d(3), comercio: 'Starbucks', descripcion: 'STARBUCKS REFORMA', monto: m(118), categoria: 'restaurantes' },
+    { fecha: d(3), comercio: 'Starbucks', descripcion: 'STARBUCKS REFORMA', monto: m(118), categoria: 'restaurantes', ...unknown },
     { fecha: d(3), comercio: 'Amazon', descripcion: 'AMZN MKTP MX', monto: m(649), categoria: 'compras', confianza: 'baja', pregunta: '¿Esta compra en Amazon fue para la casa o personal?', opciones: ['hogar', 'compras', 'regalos'] },
     { fecha: d(4), comercio: 'Depósito nómina', descripcion: 'ABONO NOMINA', monto: m(18500), categoria: 'otros', tipo: 'ingreso', metodo_pago: debit },
     { fecha: d(4), comercio: 'Transferencia a ahorro', descripcion: 'TRASPASO A CTA AHORRO', monto: m(2000), categoria: 'otros', tipo: 'transferencia', metodo_pago: debit },

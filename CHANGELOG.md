@@ -3,6 +3,14 @@
 Todos los cambios notables de este proyecto se documentan aquí.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/); versionado según [SemVer](https://semver.org/lang/es/).
 
+## [0.3.0] - 2026-11-12
+
+### Añadido
+- Aviso proactivo de tarjeta no registrada. Si la IA ve los últimos 4 dígitos de una tarjeta o cuenta que no tienes, la bandeja de revisión pregunta "No reconocí la tarjeta ••XXXX".
+  - "Agregar tarjeta" la crea con los dígitos ya puestos y se la asigna a esos movimientos.
+  - "No es mía" no vuelve a preguntar por ella, y se puede deshacer.
+- Las lecturas asignan el medio de pago también por sus últimos 4 dígitos.
+
 ## [0.2.0] - 2026-11-12
 
 ### Añadido
