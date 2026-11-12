@@ -1,5 +1,5 @@
 // Estado de la app guardado en el propio dispositivo (localStorage).
-import { PREDEFINED_CATEGORIES, DEFAULT_VISIBLE, DASHBOARD_WIDGETS } from './data.js';
+import { PREDEFINED_CATEGORIES, DEFAULT_VISIBLE, DASHBOARD_WIDGETS, DEFAULT_METHODS } from './data.js';
 import { setBaseCurrency } from './format.js';
 
 const KEY = 'ritmo.v1';
@@ -9,7 +9,8 @@ function defaultState() {
   return {
     version: 1,
     onboarded: false,
-    settings: { currency: 'MXN', theme: 'auto', apiKey: '', model: 'claude-opus-5-5', name: '', rates: {} },
+    settings: { currency: 'MXN', theme: 'auto', provider: 'anthropic', keys: {}, models: {}, name: '', rates: {}, cropTipSeen: false },
+    paymentMethods: DEFAULT_METHODS.map((m) => ({ ...m })),
     visibleCategories: [...DEFAULT_VISIBLE],
     customCategories: [],
     costCenters: [{ id: 'cc-diario', name: 'Día a día', emoji: '🗓️' }],
@@ -26,10 +27,34 @@ function load() {
     if (!raw) return defaultState();
     const parsed = JSON.parse(raw);
     const base = defaultState();
-    return { ...base, ...parsed, settings: { ...base.settings, ...(parsed.settings || {}) } };
+    return migrate({ ...base, ...parsed, settings: { ...base.settings, ...(parsed.settings || {}) } }, parsed);
   } catch {
     return defaultState();
   }
+}
+
+// Adapta datos guardados por versiones anteriores (v0.1).
+function migrate(s, raw) {
+  const st = s.settings;
+  if (st.apiKey) { st.keys = { ...st.keys, anthropic: st.apiKey }; delete st.apiKey; }
+  if (st.model) { st.models = { ...st.models, anthropic: st.model }; delete st.model; }
+  if (!raw.paymentMethods) {
+    // Los medios usados en gastos antiguos se convierten en medios configurados.
+    const used = new Set(s.expenses.map((e) => e.paymentMethod).filter(Boolean));
+    const list = [...DEFAULT_METHODS.map((m) => ({ ...m }))];
+    for (const name of used) if (!list.some((m) => m.name === name)) list.push({ id: uid('pm'), name, type: guessType(name), last4: '', owner: '' });
+    s.paymentMethods = list;
+  }
+  return s;
+}
+
+function guessType(name) {
+  const n = name.toLowerCase();
+  if (/cr[eé]dito|tdc/.test(n)) return 'credito';
+  if (/d[eé]bito|tdd/.test(n)) return 'debito';
+  if (/efectivo/.test(n)) return 'efectivo';
+  if (/mercado pago|zelle|pago m[oó]vil|billetera|paypal/.test(n)) return 'billetera';
+  return 'cuenta';
 }
 
 export const state = load();
@@ -75,6 +100,15 @@ export function visibleCategories() {
 
 export function categoryById(id) {
   return allCategories().find((c) => c.id === id) || { id: 'otros', name: 'Otros', emoji: '📦', color: 11 };
+}
+
+// Medios de pago activos (sin archivados), en el orden elegido.
+export function paymentMethods({ archived = false } = {}) {
+  return state.paymentMethods.filter((m) => Boolean(m.archived) === archived);
+}
+
+export function methodByName(name) {
+  return state.paymentMethods.find((m) => m.name === name);
 }
 
 export function costCenterById(id) {

@@ -1,23 +1,74 @@
-// Lectura de capturas, recibos y archivos con Claude (o resultados de ejemplo en modo demo).
-import { state, allCategories, visibleCategories } from './store.js';
-import { CURRENCIES, PAYMENT_METHODS } from './data.js';
+// Lectura de capturas, recibos y archivos con IA (Claude, Gemini u OpenAI),
+// o resultados de ejemplo en modo demo.
+import { state, allCategories, visibleCategories, paymentMethods } from './store.js';
+import { CURRENCIES } from './data.js';
 import { todayISO, toISO, addDays } from './format.js';
 
-const SDK_URL = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.3.0/+esm';
+const ANTHROPIC_SDK_URL = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.3.0/+esm';
 const XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
 
-export const MODELS = [
-  { id: 'claude-opus-5-5', name: 'Claude Opus 5.5', note: 'Recomendado: la mejor lectura' },
-  { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5', note: 'Más rápido y económico' },
-  { id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5', note: 'El más económico' },
+// Proveedores disponibles. Los modelos se pueden cambiar en Ajustes (incluido uno escrito a mano).
+export const PROVIDERS = [
+  {
+    id: 'anthropic', name: 'Claude', company: 'Anthropic', keyHint: 'sk-ant-…', keyUrl: 'console.anthropic.com',
+    privacy: 'Anthropic no usa lo que envías por la API para entrenar sus modelos. Se paga por uso.',
+    models: [
+      { id: 'claude-opus-5-5', name: 'Claude Opus 5.5', note: 'La mejor lectura' },
+      { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5', note: 'Rápido y más económico' },
+      { id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5', note: 'El más económico' },
+    ],
+  },
+  {
+    id: 'google', name: 'Gemini', company: 'Google', keyHint: 'AIza…', keyUrl: 'aistudio.google.com',
+    privacy: 'Tiene un nivel gratuito, pero en ese nivel Google puede usar lo que envías para mejorar sus productos. Tapa los datos sensibles antes de enviar.',
+    models: [
+      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', note: 'Rápido · con nivel gratuito' },
+      { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash-Lite', note: 'El más económico' },
+      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', note: 'Mejor lectura, más lento' },
+    ],
+  },
+  {
+    id: 'openai', name: 'ChatGPT', company: 'OpenAI', keyHint: 'sk-…', keyUrl: 'platform.openai.com',
+    privacy: 'OpenAI no usa lo que envías por la API para entrenar por defecto. Se paga por uso.',
+    models: [
+      { id: 'gpt-5', name: 'GPT-5', note: 'La mejor lectura' },
+      { id: 'gpt-5-mini', name: 'GPT-5 mini', note: 'Rápido y económico' },
+      { id: 'gpt-5-nano', name: 'GPT-5 nano', note: 'El más económico' },
+    ],
+  },
 ];
 
-export function hasApiKey() {
-  return Boolean(state.settings.apiKey && state.settings.apiKey.trim());
+export function providerById(id) {
+  return PROVIDERS.find((p) => p.id === id) || PROVIDERS[0];
 }
+
+export function currentProvider() {
+  return providerById(state.settings.provider);
+}
+
+export function currentModel() {
+  const p = currentProvider();
+  return (state.settings.models || {})[p.id] || p.models[0].id;
+}
+
+export function modelLabel(providerId, modelId) {
+  const p = providerById(providerId);
+  return p.models.find((m) => m.id === modelId)?.name || modelId;
+}
+
+export function hasApiKey(providerId = state.settings.provider) {
+  return Boolean(((state.settings.keys || {})[providerId] || '').trim());
+}
+
+function apiKey() {
+  return (state.settings.keys[state.settings.provider] || '').trim();
+}
+
+// ---------------------------------------------------------------- Esquema y prompt
 
 function schema() {
   const categoryIds = allCategories().map((c) => c.id);
+  const methods = paymentMethods().map((m) => m.name);
   return {
     type: 'object',
     additionalProperties: false,
@@ -37,7 +88,7 @@ function schema() {
             moneda: { type: 'string', enum: CURRENCIES.map((c) => c.code) },
             tipo: { type: 'string', enum: ['gasto', 'ingreso', 'transferencia', 'pago_tarjeta'] },
             categoria: { type: 'string', enum: categoryIds },
-            metodo_pago: { type: 'string', enum: [...PAYMENT_METHODS, ''] },
+            metodo_pago: { type: 'string', enum: [...methods, 'ninguno'], description: 'Uno de los medios de pago de la persona, o "ninguno" si no se deduce' },
             confianza: { type: 'string', enum: ['alta', 'baja'] },
             pregunta: { type: 'string', description: 'Pregunta corta para la persona si la confianza es baja; vacía si no' },
             opciones: { type: 'array', items: { type: 'string', enum: categoryIds }, description: '2 o 3 categorías posibles si hay duda' },
@@ -49,8 +100,11 @@ function schema() {
   };
 }
 
-function systemPrompt(mode) {
+const TYPE_LABEL = { credito: 'tarjeta de crédito', debito: 'tarjeta de débito', cuenta: 'cuenta bancaria', efectivo: 'efectivo', billetera: 'billetera digital' };
+
+function systemPrompt(mode, account) {
   const cats = visibleCategories().map((c) => `- ${c.id}: ${c.name}`).join('\n');
+  const methods = paymentMethods().map((m) => `- "${m.name}": ${TYPE_LABEL[m.type] || m.type}${m.last4 ? `, termina en ${m.last4}` : ''}${m.owner ? `, de ${m.owner}` : ''}`).join('\n');
   return `Eres el asistente de captura de una app de control de gastos para México, Argentina y Venezuela.
 Hoy es ${todayISO()}. La moneda principal de la persona es ${state.settings.currency}.
 
@@ -66,25 +120,21 @@ Reglas:
 - categoria: elige de esta lista según el comercio o concepto:
 ${cats}
 - Si dudas de la categoría o de si es gasto, pon confianza "baja", escribe en pregunta algo corto y concreto en español con tuteo (por ejemplo: ¿“MERPAGO*JUAN” es comida o un pago a una persona?) y propone 2 o 3 categorías en opciones. Si no dudas, confianza "alta", pregunta vacía y opciones vacías.
-- metodo_pago: solo si se deduce del documento; si no, vacío.`;
+- metodo_pago: estos son los medios de pago de la persona:
+${methods || '(no tiene medios configurados)'}
+${account ? `La persona indicó que estos archivos son de "${account}": úsalo para todos los movimientos salvo que el documento diga claramente otra cosa.` : 'Elige el que corresponda según el banco, el tipo de tarjeta o los últimos dígitos que se vean. Si no se puede deducir, usa "ninguno".'}
+- Algunas partes de las imágenes pueden estar tapadas con recuadros negros a propósito: ignóralas.`;
 }
 
-async function fileToBlocks(file) {
-  const name = file.name.toLowerCase();
-  if (file.type.startsWith('image/')) {
-    const data = await imageToJpegBase64(file);
-    return [{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data } }];
-  }
-  if (file.type === 'application/pdf' || name.endsWith('.pdf')) {
-    const data = await fileToBase64(file);
-    return [{ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } }];
-  }
-  if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
-    const text = await spreadsheetToCsv(file);
-    return [{ type: 'text', text: `Archivo ${file.name} (hoja de cálculo convertida a CSV):\n${text}` }];
-  }
-  const text = await file.text();
-  return [{ type: 'text', text: `Archivo ${file.name}:\n${text}` }];
+// ---------------------------------------------------------------- Archivos
+
+// Convierte cada archivo en una pieza neutra: imagen, pdf o texto.
+async function preparePart(file) {
+  const name = (file.name || '').toLowerCase();
+  if (file.type.startsWith('image/')) return { kind: 'image', mime: 'image/jpeg', data: await imageToJpegBase64(file) };
+  if (file.type === 'application/pdf' || name.endsWith('.pdf')) return { kind: 'pdf', mime: 'application/pdf', data: await fileToBase64(file), name: file.name };
+  if (name.endsWith('.xlsx') || name.endsWith('.xls')) return { kind: 'text', text: `Archivo ${file.name} (hoja de cálculo convertida a CSV):\n${await spreadsheetToCsv(file)}` };
+  return { kind: 'text', text: `Archivo ${file.name}:\n${await file.text()}` };
 }
 
 function fileToBase64(file) {
@@ -125,27 +175,49 @@ async function spreadsheetToCsv(file) {
 
 export class AiError extends Error {}
 
-// Envía los archivos a Claude y devuelve { movimientos, nota }.
-export async function extractWithClaude(files, mode, onStep = () => {}) {
-  const { default: Anthropic } = await import(SDK_URL);
-  const client = new Anthropic({ apiKey: state.settings.apiKey.trim(), dangerouslyAllowBrowser: true });
+// ---------------------------------------------------------------- Entrada principal
 
-  const content = [];
+// Envía los archivos a la IA elegida y devuelve { movimientos, nota }.
+export async function extractWithAI(files, mode, onStep = () => {}, { account = '' } = {}) {
+  const parts = [];
   for (let i = 0; i < files.length; i++) {
     onStep(`Preparando ${i + 1} de ${files.length}…`);
-    content.push(...(await fileToBlocks(files[i])));
+    parts.push(await preparePart(files[i]));
   }
-  content.push({ type: 'text', text: mode === 'receipt' ? 'Lee este recibo.' : `Lee todos los movimientos de ${files.length > 1 ? 'estos archivos' : 'este archivo'}.` });
-  onStep(files.length > 1 ? `Leyendo ${files.length} archivos…` : 'Leyendo…');
+  const ask = mode === 'receipt' ? 'Lee este recibo.' : `Lee todos los movimientos de ${files.length > 1 ? 'estos archivos' : 'este archivo'}.`;
+  const p = currentProvider();
+  onStep(`${files.length > 1 ? `Leyendo ${files.length} archivos` : 'Leyendo'} con ${p.name}…`);
+  const req = { system: systemPrompt(mode, account), parts, ask, model: currentModel(), key: apiKey() };
+  const run = { anthropic: viaAnthropic, google: viaGemini, openai: viaOpenAI }[p.id];
+  const text = await run(req);
+  let result;
+  try {
+    result = JSON.parse(text);
+  } catch {
+    throw new AiError('La respuesta de la IA no se pudo interpretar.');
+  }
+  for (const m of result.movimientos || []) if (m.metodo_pago === 'ninguno') m.metodo_pago = '';
+  return result;
+}
 
+// ---------------------------------------------------------------- Claude (SDK oficial)
+
+async function viaAnthropic({ system, parts, ask, model, key }) {
+  const { default: Anthropic } = await import(ANTHROPIC_SDK_URL);
+  const client = new Anthropic({ apiKey: key, dangerouslyAllowBrowser: true });
+  const content = parts.map((x) => (x.kind === 'image'
+    ? { type: 'image', source: { type: 'base64', media_type: x.mime, data: x.data } }
+    : x.kind === 'pdf'
+      ? { type: 'document', source: { type: 'base64', media_type: x.mime, data: x.data } }
+      : { type: 'text', text: x.text }));
+  content.push({ type: 'text', text: ask });
   const params = {
-    model: state.settings.model || 'claude-opus-5-5',
+    model,
     max_tokens: 16000,
-    system: systemPrompt(mode),
+    system,
     messages: [{ role: 'user', content }],
     output_config: { effort: 'medium', format: { type: 'json_schema', schema: schema() } },
   };
-
   let message;
   try {
     try {
@@ -156,7 +228,7 @@ export async function extractWithClaude(files, mode, onStep = () => {}) {
       else throw err;
     }
   } catch (err) {
-    if (err instanceof Anthropic.AuthenticationError) throw new AiError('La clave de API no es válida. Revísala en Ajustes.');
+    if (err instanceof Anthropic.AuthenticationError) throw new AiError('La clave de Anthropic no es válida. Revísala en Ajustes.');
     if (err instanceof Anthropic.PermissionDeniedError) throw new AiError('Tu clave no tiene permiso para este modelo.');
     if (err instanceof Anthropic.RateLimitError) throw new AiError('Demasiadas solicitudes seguidas. Espera un momento y vuelve a intentar.');
     if (err instanceof Anthropic.BadRequestError) throw new AiError(`La solicitud no fue aceptada: ${err.message}`);
@@ -164,19 +236,133 @@ export async function extractWithClaude(files, mode, onStep = () => {}) {
     if (err instanceof Anthropic.APIError) throw new AiError(`Error del servicio de IA (${err.status ?? 'sin código'}).`);
     throw err;
   }
-
   if (message.stop_reason === 'refusal') throw new AiError('La IA no pudo procesar este contenido.');
-  if (message.stop_reason === 'max_tokens') throw new AiError('Hay demasiados movimientos en una sola carga. Divide los archivos en partes más pequeñas.');
-  const text = message.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
+  if (message.stop_reason === 'max_tokens') throw tooMany();
+  return message.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
+}
+
+// ---------------------------------------------------------------- Gemini (REST)
+
+// Gemini acepta un subconjunto de JSON Schema: sin additionalProperties ni valores vacíos en enum.
+function geminiSchema(node) {
+  if (Array.isArray(node)) return node.map(geminiSchema);
+  if (!node || typeof node !== 'object') return node;
+  const out = {};
+  for (const [k, v] of Object.entries(node)) {
+    if (k === 'additionalProperties') continue;
+    if (k === 'enum') out.enum = v.filter((x) => x !== '');
+    else if (k === 'properties') out.properties = Object.fromEntries(Object.entries(v).map(([pk, pv]) => [pk, geminiSchema(pv)]));
+    else out[k] = geminiSchema(v);
+  }
+  return out;
+}
+
+async function viaGemini({ system, parts, ask, model, key }) {
+  const body = {
+    systemInstruction: { parts: [{ text: system }] },
+    contents: [{
+      role: 'user',
+      parts: [...parts.map((x) => (x.kind === 'text' ? { text: x.text } : { inlineData: { mimeType: x.mime, data: x.data } })), { text: ask }],
+    }],
+    generationConfig: { responseMimeType: 'application/json', responseSchema: geminiSchema(schema()), maxOutputTokens: 16000 },
+  };
+  const res = await safeFetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = data.error?.message || '';
+    if (res.status === 400 && /api key/i.test(msg)) throw new AiError('La clave de Google no es válida. Revísala en Ajustes.');
+    if (res.status === 403) throw new AiError('Tu clave de Google no tiene permiso para este modelo.');
+    if (res.status === 404) throw new AiError(`El modelo “${model}” no existe o no está disponible para tu clave.`);
+    if (res.status === 429) throw new AiError('Llegaste al límite de uso de Gemini (el nivel gratuito tiene un tope por minuto y por día). Espera un poco.');
+    throw new AiError(`Error de Gemini (${res.status})${msg ? `: ${msg}` : ''}`);
+  }
+  if (data.promptFeedback?.blockReason) throw new AiError('Gemini no pudo procesar este contenido.');
+  const cand = data.candidates?.[0];
+  if (!cand) throw new AiError('Gemini no devolvió respuesta.');
+  if (cand.finishReason === 'MAX_TOKENS') throw tooMany();
+  if (cand.finishReason && !['STOP', 'FINISH_REASON_UNSPECIFIED'].includes(cand.finishReason)) throw new AiError('Gemini no pudo procesar este contenido.');
+  return (cand.content?.parts || []).map((x) => x.text || '').join('');
+}
+
+// ---------------------------------------------------------------- OpenAI (REST)
+
+async function viaOpenAI({ system, parts, ask, model, key }) {
+  const content = parts.map((x) => (x.kind === 'image'
+    ? { type: 'image_url', image_url: { url: `data:${x.mime};base64,${x.data}` } }
+    : x.kind === 'pdf'
+      ? { type: 'file', file: { filename: x.name || 'archivo.pdf', file_data: `data:${x.mime};base64,${x.data}` } }
+      : { type: 'text', text: x.text }));
+  content.push({ type: 'text', text: ask });
+  const res = await safeFetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: 'system', content: system }, { role: 'user', content }],
+      response_format: { type: 'json_schema', json_schema: { name: 'movimientos', strict: true, schema: schema() } },
+      max_completion_tokens: 16000,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = data.error?.message || '';
+    if (res.status === 401) throw new AiError('La clave de OpenAI no es válida. Revísala en Ajustes.');
+    if (res.status === 403) throw new AiError('Tu clave de OpenAI no tiene permiso para este modelo.');
+    if (res.status === 404) throw new AiError(`El modelo “${model}” no existe o no está disponible para tu clave.`);
+    if (res.status === 429) throw new AiError(data.error?.code === 'insufficient_quota' ? 'Tu cuenta de OpenAI no tiene saldo.' : 'Demasiadas solicitudes seguidas. Espera un momento.');
+    throw new AiError(`Error de OpenAI (${res.status})${msg ? `: ${msg}` : ''}`);
+  }
+  const choice = data.choices?.[0];
+  if (!choice) throw new AiError('OpenAI no devolvió respuesta.');
+  if (choice.message?.refusal) throw new AiError('La IA no pudo procesar este contenido.');
+  if (choice.finish_reason === 'length') throw tooMany();
+  return choice.message?.content || '';
+}
+
+// ---------------------------------------------------------------- Probar conexión
+
+// Consulta la lista de modelos del proveedor: valida la clave sin costo de uso.
+export async function testConnection(providerId) {
+  const key = ((state.settings.keys || {})[providerId] || '').trim();
+  if (!key) throw new AiError('Primero pega tu clave.');
+  if (providerId === 'anthropic') {
+    const { default: Anthropic } = await import(ANTHROPIC_SDK_URL);
+    const client = new Anthropic({ apiKey: key, dangerouslyAllowBrowser: true });
+    try {
+      await client.models.list({ limit: 1 });
+    } catch (err) {
+      if (err instanceof Anthropic.AuthenticationError) throw new AiError('Clave inválida');
+      if (err instanceof Anthropic.APIConnectionError) throw new AiError('Sin conexión');
+      throw new AiError(`Error ${err.status ?? ''}`.trim());
+    }
+    return true;
+  }
+  const res = providerId === 'google'
+    ? await safeFetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=1', { headers: { 'x-goog-api-key': key } })
+    : await safeFetch('https://api.openai.com/v1/models', { headers: { Authorization: `Bearer ${key}` } });
+  if (res.ok) return true;
+  if ([400, 401, 403].includes(res.status)) throw new AiError('Clave inválida');
+  throw new AiError(`Error ${res.status}`);
+}
+
+async function safeFetch(url, opts) {
   try {
-    return JSON.parse(text);
+    return await fetch(url, opts);
   } catch {
-    throw new AiError('La respuesta de la IA no se pudo interpretar.');
+    throw new AiError('Sin conexión con el servicio de IA.');
   }
 }
 
-// Modo demo: resultados de ejemplo realistas sin llamar a la API.
-export async function extractDemo(files, mode, onStep = () => {}) {
+const tooMany = () => new AiError('Hay demasiados movimientos en una sola carga. Divide los archivos en partes más pequeñas.');
+
+// ---------------------------------------------------------------- Demo
+
+// Modo demo: resultados de ejemplo realistas sin llamar a ninguna API.
+export async function extractDemo(files, mode, onStep = () => {}, { account = '' } = {}) {
   for (let i = 0; i < files.length; i++) {
     onStep(`Leyendo ${i + 1} de ${files.length}…`);
     await wait(650);
@@ -186,9 +372,12 @@ export async function extractDemo(files, mode, onStep = () => {}) {
   const cur = state.settings.currency;
   const k = { MXN: 1, USD: 0.06, EUR: 0.05, ARS: 60, VES: 3 }[cur] || 1;
   const m = (v) => Math.round(v * k * 100) / 100;
-  const base = { moneda: cur, metodo_pago: '', pregunta: '', opciones: [], confianza: 'alta', tipo: 'gasto' };
+  const methods = paymentMethods();
+  const card = account || methods.find((x) => x.type === 'credito')?.name || '';
+  const debit = methods.find((x) => x.type === 'debito' || x.type === 'cuenta')?.name || '';
+  const base = { moneda: cur, metodo_pago: card, pregunta: '', opciones: [], confianza: 'alta', tipo: 'gasto' };
   if (mode === 'receipt') {
-    return { nota: '', movimientos: [{ ...base, fecha: d(0), comercio: 'Soriana Híper', descripcion: 'SORIANA HIPER SUC 118 · TOTAL', monto: m(1284.6), categoria: 'supermercado', metodo_pago: 'Débito' }] };
+    return { nota: '', movimientos: [{ ...base, fecha: d(0), comercio: 'Soriana Híper', descripcion: 'SORIANA HIPER SUC 118 · TOTAL', monto: m(1284.6), categoria: 'supermercado', metodo_pago: debit }] };
   }
   const list = [
     { fecha: d(0), comercio: 'OXXO', descripcion: 'OXXO PALMAS 1182', monto: m(87), categoria: 'supermercado' },
@@ -198,8 +387,8 @@ export async function extractDemo(files, mode, onStep = () => {}) {
     { fecha: d(2), comercio: 'MP*TIENDITA', descripcion: 'MERCADOPAGO*TIENDITA', monto: m(158), categoria: 'supermercado', confianza: 'baja', pregunta: '¿“MP*TIENDITA” es una compra de súper o de algo para la casa?', opciones: ['supermercado', 'hogar', 'otros'] },
     { fecha: d(3), comercio: 'Starbucks', descripcion: 'STARBUCKS REFORMA', monto: m(118), categoria: 'restaurantes' },
     { fecha: d(3), comercio: 'Amazon', descripcion: 'AMZN MKTP MX', monto: m(649), categoria: 'compras', confianza: 'baja', pregunta: '¿Esta compra en Amazon fue para la casa o personal?', opciones: ['hogar', 'compras', 'regalos'] },
-    { fecha: d(4), comercio: 'Depósito nómina', descripcion: 'ABONO NOMINA', monto: m(18500), categoria: 'otros', tipo: 'ingreso' },
-    { fecha: d(4), comercio: 'Transferencia a ahorro', descripcion: 'TRASPASO A CTA AHORRO', monto: m(2000), categoria: 'otros', tipo: 'transferencia' },
+    { fecha: d(4), comercio: 'Depósito nómina', descripcion: 'ABONO NOMINA', monto: m(18500), categoria: 'otros', tipo: 'ingreso', metodo_pago: debit },
+    { fecha: d(4), comercio: 'Transferencia a ahorro', descripcion: 'TRASPASO A CTA AHORRO', monto: m(2000), categoria: 'otros', tipo: 'transferencia', metodo_pago: debit },
   ];
   // Repite un gasto existente para mostrar la detección de duplicados.
   const existing = state.expenses.filter((e) => e.status === 'confirmed').slice(-1)[0];

@@ -1,9 +1,9 @@
 // Service worker: la app funciona sin conexión (excepto la lectura con IA).
-const VERSION = 'ritmo-v0.1.0';
+const VERSION = 'ritmo-v0.2.0';
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/styles.css',
   './js/app.js', './js/store.js', './js/data.js', './js/format.js', './js/budget.js',
-  './js/charts.js', './js/ui.js', './js/sample.js', './js/ai.js',
+  './js/charts.js', './js/ui.js', './js/sample.js', './js/ai.js', './js/imageeditor.js',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png',
 ];
 

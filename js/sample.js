@@ -34,7 +34,7 @@ export function loadSampleData() {
     expenses.push(normalizeExpense({
       id: uid('g'), date: toISO(date), categoryId, description: merchant, merchant,
       amount: Math.round(amount * k * 100) / 100, currency: state.settings.currency,
-      costCenterId: 'cc-diario', paymentMethod: ['Débito', 'Crédito', 'Efectivo', 'Transferencia'][Math.floor(r() * 4)],
+      costCenterId: 'cc-diario', paymentMethod: ['Cuenta Bancomer', 'TDC BBVA', 'Efectivo', 'TDC Santander'][Math.floor(r() * 4)],
       status: 'confirmed', source: ['manual', 'batch', 'receipt'][Math.floor(r() * 3)], createdAt: Date.now(), ...extra,
     }));
   };
@@ -52,11 +52,11 @@ export function loadSampleData() {
     if (r() < (isThisMonth ? 0.16 : 0.1)) { const [m, a] = pick(MERCHANTS.entretenimiento, r); push(date, 'entretenimiento', m, a * (0.8 + r() * 0.5)); }
     if (r() < 0.06) { const [m, a] = pick(MERCHANTS.compras, r); push(date, 'compras', m, a * (0.6 + r() * 0.8)); }
     if (r() < 0.05) { const [m, a] = pick(MERCHANTS.salud, r); push(date, 'salud', m, a * (0.6 + r() * 0.8)); }
-    if (day === 1) push(date, 'renta', 'Renta departamento', 9500, { paymentMethod: 'Transferencia' });
+    if (day === 1) push(date, 'renta', 'Renta departamento', 9500, { paymentMethod: 'Cuenta Bancomer' });
     if (day === 5) push(date, 'servicios', 'CFE', 640 * (0.8 + r() * 0.4));
     if (day === 8) push(date, 'servicios', 'Totalplay', 589);
-    if (day === 12) push(date, 'suscripciones', 'Netflix', 249, { paymentMethod: 'Crédito' });
-    if (day === 18) push(date, 'suscripciones', 'Spotify', 129, { paymentMethod: 'Crédito' });
+    if (day === 12) push(date, 'suscripciones', 'Netflix', 249, { paymentMethod: 'TDC BBVA' });
+    if (day === 18) push(date, 'suscripciones', 'Spotify', 129, { paymentMethod: 'TDC BBVA' });
   }
 
   // Viaje a Cancún: centro de costo sin periodicidad.
@@ -67,7 +67,7 @@ export function loadSampleData() {
     [3, 'restaurantes', 'Mariscos El Fénix', 980], [4, 'compras', 'Souvenirs 5ta Av', 760], [5, 'restaurantes', 'Café Nader', 380],
   ];
   for (const [off, cat, m, a] of trip) {
-    push(addDays(tripStart, off), cat, m, a, { costCenterId: 'cc-cancun', paymentMethod: 'Crédito' });
+    push(addDays(tripStart, off), cat, m, a, { costCenterId: 'cc-cancun', paymentMethod: 'TDC BBVA' });
   }
 
   // Pendientes en la bandeja para mostrar cómo se revisa.
@@ -81,7 +81,7 @@ export function loadSampleData() {
     { date: toISO(addDays(today, -3)), merchant: 'Pago tarjeta de crédito', description: 'PAGO TDC', categoryId: 'otros', amount: 5400, ai: { tipo: 'pago_tarjeta', confianza: 'alta' } },
   ];
   for (const p of pend) {
-    expenses.push(normalizeExpense({ id: uid('g'), currency: state.settings.currency, paymentMethod: 'Débito', ...pendingBase, ...p, amount: Math.round(p.amount * k * 100) / 100 }));
+    expenses.push(normalizeExpense({ id: uid('g'), currency: state.settings.currency, paymentMethod: 'TDC BBVA', ...pendingBase, ...p, amount: Math.round(p.amount * k * 100) / 100 }));
   }
   // Un duplicado de un gasto ya registrado.
   const recent = expenses.filter((e) => e.status === 'confirmed' && e.categoryId === 'supermercado').slice(-1)[0];
@@ -89,17 +89,24 @@ export function loadSampleData() {
     expenses.push(normalizeExpense({ ...recent, id: uid('g'), ...pendingBase, description: recent.merchant.toUpperCase(), ai: { tipo: 'gasto', confianza: 'alta', dupOf: recent.id } }));
   }
 
+  state.paymentMethods = [
+    { id: 'pm-bbva', name: 'TDC BBVA', type: 'credito', last4: '4521', owner: '' },
+    { id: 'pm-santander', name: 'TDC Santander', type: 'credito', last4: '8830', owner: '' },
+    { id: 'pm-bbva-b', name: 'TDC BBVA Betzabeth', type: 'credito', last4: '1907', owner: 'Betzabeth' },
+    { id: 'pm-bancomer', name: 'Cuenta Bancomer', type: 'cuenta', last4: '', owner: '' },
+    { id: 'pm-efectivo', name: 'Efectivo', type: 'efectivo', last4: '', owner: '' },
+  ];
   state.costCenters = [
     { id: 'cc-diario', name: 'Día a día', emoji: '🗓️' },
     { id: 'cc-cancun', name: 'Viaje a Cancún', emoji: '🏝️' },
   ];
   state.visibleCategories = Array.from(new Set([...state.visibleCategories, 'viajes']));
   state.budgets = [
-    { id: uid('p'), name: 'Día a día', costCenterId: 'cc-diario', categoryId: null, amount: 26000 * k, period: 'monthly', resetDay: 1 },
-    { id: uid('p'), name: 'Supermercado', costCenterId: 'cc-diario', categoryId: 'supermercado', amount: 6000 * k, period: 'monthly', resetDay: 1 },
-    { id: uid('p'), name: 'Comida fuera', costCenterId: 'cc-diario', categoryId: 'restaurantes', amount: 2200 * k, period: 'monthly', resetDay: 1 },
-    { id: uid('p'), name: 'Transporte', costCenterId: 'cc-diario', categoryId: 'transporte', amount: 2200 * k, period: 'monthly', resetDay: 1 },
-    { id: uid('p'), name: 'Entretenimiento', costCenterId: 'cc-diario', categoryId: 'entretenimiento', amount: 1200 * k, period: 'monthly', resetDay: 1 },
+    { id: uid('p'), name: 'Día a día', costCenterId: 'cc-diario', categoryId: null, amount: 26000 * k, period: 'monthly', resetDay: 1, groupId: 'plan-diario' },
+    { id: uid('p'), name: 'Supermercado', costCenterId: 'cc-diario', categoryId: 'supermercado', amount: 6000 * k, period: 'monthly', resetDay: 1, groupId: 'plan-diario' },
+    { id: uid('p'), name: 'Comida fuera', costCenterId: 'cc-diario', categoryId: 'restaurantes', amount: 2200 * k, period: 'monthly', resetDay: 1, groupId: 'plan-diario' },
+    { id: uid('p'), name: 'Transporte', costCenterId: 'cc-diario', categoryId: 'transporte', amount: 2200 * k, period: 'monthly', resetDay: 1, groupId: 'plan-diario' },
+    { id: uid('p'), name: 'Entretenimiento', costCenterId: 'cc-diario', categoryId: 'entretenimiento', amount: 1200 * k, period: 'monthly', resetDay: 1, groupId: 'plan-diario' },
     { id: uid('p'), name: 'Viaje a Cancún', costCenterId: 'cc-cancun', categoryId: null, amount: 26000 * k, period: 'none', startDate: toISO(tripStart), endDate: toISO(addDays(tripStart, 9)) },
   ];
   state.expenses = expenses;

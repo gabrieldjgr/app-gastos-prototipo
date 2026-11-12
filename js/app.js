@@ -2,9 +2,9 @@
 import {
   state, save, subscribe, uid, allCategories, visibleCategories, categoryById, costCenterById,
   mostUsedCategories, addExpense, updateExpense, removeExpense, restoreExpense, confirmed, pending,
-  findDuplicate, resetAll, rateFor,
+  findDuplicate, resetAll, rateFor, paymentMethods, methodByName,
 } from './store.js';
-import { CURRENCIES, PAYMENT_METHODS, PERIODS, WEEKDAYS, DASHBOARD_WIDGETS, PREDEFINED_CATEGORIES } from './data.js';
+import { CURRENCIES, METHOD_TYPES, PERIODS, WEEKDAYS, DASHBOARD_WIDGETS, PREDEFINED_CATEGORIES } from './data.js';
 import {
   money, moneyShort, dateShort, dayHeader, todayISO, toISO, parseISO, addDays, daysAgo, monthName,
   esc, parseAmount, currencyPrefix, formatNumber, dateRange,
@@ -18,7 +18,10 @@ import {
   icon, openSheet, closeTopSheet, pick, confirmDialog, toast, confetti, swipeable, collapse, countUp, vibrate,
 } from './ui.js';
 import { loadSampleData } from './sample.js';
-import { hasApiKey, extractWithClaude, extractDemo, MODELS, AiError } from './ai.js';
+import {
+  hasApiKey, extractWithAI, extractDemo, AiError, PROVIDERS, providerById, currentProvider, currentModel, modelLabel, testConnection,
+} from './ai.js';
+import { openImageEditor } from './imageeditor.js';
 
 const app = document.getElementById('app');
 const view = {
@@ -27,6 +30,7 @@ const view = {
   filters: { period: 'month', category: null, cc: null, method: null, q: '' },
   reviewBase: 0,
   expanded: null,
+  openPlans: new Set(),
 };
 const animated = new Set();
 
@@ -276,7 +280,7 @@ function renderExpenses() {
         ${chip('period', 'Período', periodLabel, true)}
         ${chip('category', 'Categoría', f.category ? categoryById(f.category).name : '', !!f.category)}
         ${chip('cc', 'Centro', f.cc ? costCenterById(f.cc).name : '', !!f.cc)}
-        ${chip('method', 'Método', f.method || '', !!f.method)}
+        ${chip('method', 'Medio', f.method || '', !!f.method)}
       </div>
     </div>
     <div id="exp-list"></div>`;
@@ -355,7 +359,7 @@ async function chooseFilter(key) {
   if (key === 'period') value = await pick({ title: 'Período', options: PERIOD_FILTERS, selected: f.period });
   if (key === 'category') value = await pick({ title: 'Categoría', options: visibleCategories().map((c) => ({ value: c.id, label: c.name, emoji: c.emoji, color: c.color })), selected: f.category });
   if (key === 'cc') value = await pick({ title: 'Centro de costo', options: state.costCenters.map((c) => ({ value: c.id, label: c.name, emoji: c.emoji })), selected: f.cc });
-  if (key === 'method') value = await pick({ title: 'Método de pago', options: PAYMENT_METHODS.map((m) => ({ value: m, label: m })), selected: f.method });
+  if (key === 'method') value = await pick({ title: 'Medio de pago', options: state.paymentMethods.map(methodOption), selected: f.method });
   if (value === undefined) return;
   f[key] = value;
   rerender();
@@ -536,28 +540,312 @@ function periodText(b) {
   return `Sin periodicidad · ${dateRange(start, end)}`;
 }
 
+function budgetCard(b) {
+  const s = budgetStats(b, state.expenses);
+  const cc = costCenterById(b.costCenterId);
+  const cat = b.categoryId ? categoryById(b.categoryId) : null;
+  return `<button class="card budget-card" data-action="open-budget" data-id="${b.id}">
+    <div class="bc-top"><span class="avatar sm" style="--cat:var(--c${cat ? cat.color : 6})">${cat ? cat.emoji : cc.emoji || '🎯'}</span>
+      <span class="row-main"><span class="row-title">${esc(b.name)}</span><span class="chip mini">${esc(periodText(b))}</span></span>
+      <span class="status-pill ${s.status}">${STATUS_TEXT[s.status]}</span></div>
+    ${progressWithNotch(s)}
+    <div class="bc-foot"><span><b class="num">${money(s.spent, undefined, { hero: true })}</b> de ${money(s.amount, undefined, { hero: true })}</span><span class="muted">${s.daysLeft > 0 ? `Quedan ${s.daysLeft} ${s.daysLeft === 1 ? 'día' : 'días'}` : 'Cerrado'}</span></div>
+  </button>`;
+}
+
+// Tarjeta agrupada de un plan: total del centro de costo + filas por categoría.
+function planCard(groupId) {
+  const list = state.budgets.filter((b) => b.groupId === groupId);
+  const total = list.find((b) => !b.categoryId);
+  if (!total) return list.map(budgetCard).join('');
+  const s = budgetStats(total, state.expenses);
+  const rows = list.filter((b) => b.categoryId).map((b) => ({ b, s: budgetStats(b, state.expenses) }))
+    .sort((x, y) => y.s.spent / y.s.amount - x.s.spent / x.s.amount);
+  const sum = rows.reduce((a, r) => a + r.s.amount, 0);
+  const unassigned = Math.round((s.amount - sum) * 100) / 100;
+  const spentUnassigned = Math.max(0, s.spent - rows.reduce((a, r) => a + r.s.spent, 0));
+  const open = view.openPlans.has(groupId);
+  const shown = open ? rows : rows.slice(0, 4);
+  const row = ({ b, s: st }) => {
+    const cat = categoryById(b.categoryId);
+    const pct = Math.min(100, (st.spent / Math.max(st.amount, 1)) * 100);
+    const left = st.amount - st.spent;
+    return `<button class="plan-row" data-action="open-budget" data-id="${b.id}"><span class="avatar xs" style="--cat:var(--c${cat.color})">${cat.emoji}</span>
+      <span class="plan-row-main"><span class="plan-row-top"><span>${esc(cat.name)}</span><span class="num ${left < 0 ? 'over-text' : 'muted'}">${left < 0 ? `${money(-left)} de más` : `quedan ${money(left)}`}</span></span>
+      <span class="cat-bar"><i class="${st.status}" style="width:${pct.toFixed(1)}%"></i></span></span></button>`;
+  };
+  return `<div class="card plan-card">
+    <button class="plan-head" data-action="open-budget" data-id="${total.id}">
+      <div class="bc-top"><span class="avatar sm" style="--cat:var(--c6)">${costCenterById(total.costCenterId).emoji || '🎯'}</span>
+        <span class="row-main"><span class="row-title">Plan · ${esc(total.name)}</span><span class="chip mini">${esc(periodText(total))}</span></span>
+        <span class="status-pill ${s.status}">${STATUS_TEXT[s.status]}</span></div>
+      ${progressWithNotch(s)}
+      <div class="bc-foot"><span><b class="num">${money(s.spent, undefined, { hero: true })}</b> de ${money(s.amount, undefined, { hero: true })}</span><span class="muted">${s.daysLeft > 0 ? `Quedan ${s.daysLeft} ${s.daysLeft === 1 ? 'día' : 'días'}` : 'Cerrado'}</span></div>
+    </button>
+    <div class="plan-rows">${shown.map(row).join('')}
+      ${unassigned > 0 ? `<div class="plan-row static"><span class="avatar xs" style="--cat:var(--c11)">🫙</span><span class="plan-row-main"><span class="plan-row-top"><span>Sin asignar</span><span class="num muted">${money(spentUnassigned)} de ${money(unassigned)}</span></span>
+        <span class="cat-bar"><i class="${spentUnassigned > unassigned ? 'over' : 'ok'}" style="width:${Math.min(100, (spentUnassigned / unassigned) * 100).toFixed(1)}%"></i></span></span></div>` : ''}
+    </div>
+    ${rows.length > 4 ? `<button class="link-btn plan-more" data-action="toggle-plan" data-id="${groupId}">${open ? 'Ver menos' : `Ver ${rows.length - 4} más`}</button>` : ''}
+  </div>`;
+}
+
 function renderBudgets() {
   let html = topbar('Presupuestos', { action: `<button class="btn primary sm" data-action="new-budget">${icon('plus')} Nuevo</button>` });
   if (!state.budgets.length) {
-    return html + emptyState('🎯', 'Sin presupuestos todavía', 'Define cuánto quieres gastar por centro de costo o por categoría y la app te dirá si vas al ritmo.', '<button class="btn primary" data-action="new-budget">Crear presupuesto</button>');
+    return html + emptyState('🎯', 'Sin presupuestos todavía', 'Arma un plan por centro de costo: pones cuánto quieres gastar en cada categoría y la app te dice si vas al ritmo.', '<button class="btn primary" data-action="new-plan">Crear un plan</button>');
   }
   for (const cc of state.costCenters) {
-    const list = state.budgets.filter((b) => b.costCenterId === cc.id).sort((a, b) => (a.categoryId ? 1 : 0) - (b.categoryId ? 1 : 0));
+    const list = state.budgets.filter((b) => b.costCenterId === cc.id);
     if (!list.length) continue;
     html += `<h2 class="section-title">${cc.emoji || ''} ${esc(cc.name)}</h2>`;
-    html += list.map((b) => {
-      const s = budgetStats(b, state.expenses);
-      const cat = b.categoryId ? categoryById(b.categoryId) : null;
-      return `<button class="card budget-card" data-action="open-budget" data-id="${b.id}">
-        <div class="bc-top"><span class="avatar sm" style="--cat:var(--c${cat ? cat.color : 6})">${cat ? cat.emoji : cc.emoji || '🎯'}</span>
-          <span class="row-main"><span class="row-title">${esc(b.name)}</span><span class="chip mini">${esc(periodText(b))}</span></span>
-          <span class="status-pill ${s.status}">${STATUS_TEXT[s.status]}</span></div>
-        ${progressWithNotch(s)}
-        <div class="bc-foot"><span><b class="num">${money(s.spent, undefined, { hero: true })}</b> de ${money(s.amount, undefined, { hero: true })}</span><span class="muted">${s.daysLeft > 0 ? `Quedan ${s.daysLeft} ${s.daysLeft === 1 ? 'día' : 'días'}` : 'Cerrado'}</span></div>
-      </button>`;
-    }).join('');
+    const groups = [...new Set(list.filter((b) => b.groupId).map((b) => b.groupId))];
+    html += groups.map(planCard).join('');
+    html += list.filter((b) => !b.groupId).sort((a, b) => (a.categoryId ? 1 : 0) - (b.categoryId ? 1 : 0)).map(budgetCard).join('');
   }
   return html;
+}
+
+function openNewBudget() {
+  const sheet = openSheet({
+    title: 'Nuevo presupuesto',
+    body: `<div class="add-options">
+      <button class="add-opt main" data-opt="plan"><span class="add-emoji">🗂️</span><span><b>Plan por centro de costo</b><small>Todas tus categorías en una lista: pones el monto de cada una y listo</small></span>${icon('chevron')}</button>
+      <button class="add-opt" data-opt="single"><span class="add-emoji">🎯</span><span><b>Presupuesto suelto</b><small>Un solo monto para un centro o una categoría</small></span>${icon('chevron')}</button>
+    </div>`,
+  });
+  sheet.body.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-opt]');
+    if (!b) return;
+    sheet.close();
+    setTimeout(() => (b.dataset.opt === 'plan' ? openPlanEditor() : openBudgetEditor()), 120);
+  });
+}
+
+// Promedio mensual de gasto por categoría en un centro de costo (3 meses completos anteriores).
+function historyAverages(costCenterId) {
+  const now = new Date();
+  const from = toISO(new Date(now.getFullYear(), now.getMonth() - 3, 1));
+  const to = toISO(new Date(now.getFullYear(), now.getMonth(), 1));
+  const sums = {};
+  let any = false;
+  for (const e of state.expenses) {
+    if (e.status !== 'confirmed' || e.costCenterId !== costCenterId || e.date < from || e.date >= to) continue;
+    sums[e.categoryId] = (sums[e.categoryId] || 0) + e.amountBase;
+    any = true;
+  }
+  return any ? Object.fromEntries(Object.entries(sums).map(([k, v]) => [k, v / 3])) : null;
+}
+
+const PERIOD_FACTOR = { monthly: 1, biweekly: 15.2 / 30.4, weekly: 7 / 30.4, yearly: 12 };
+
+function roundNice(v) {
+  const step = v >= 2000 ? 100 : v >= 200 ? 50 : 10;
+  return Math.max(step, Math.round(v / step) * step);
+}
+
+// Editor de plan: un centro de costo, un período y un monto por categoría.
+function openPlanEditor({ groupId = null, costCenterId = null } = {}) {
+  const existing = groupId ? state.budgets.filter((b) => b.groupId === groupId) : [];
+  const totalB = existing.find((b) => !b.categoryId);
+  const p = {
+    groupId: groupId || uid('plan'),
+    costCenterId: totalB?.costCenterId || costCenterId || (state.costCenters.find((c) => !state.budgets.some((b) => b.groupId && b.costCenterId === c.id)) || state.costCenters[0]).id,
+    period: totalB?.period || 'monthly',
+    resetDay: totalB?.resetDay || 1,
+    startDate: totalB?.startDate || todayISO(),
+    endDate: totalB?.endDate || toISO(addDays(new Date(), 13)),
+    amounts: Object.fromEntries(existing.filter((b) => b.categoryId).map((b) => [b.categoryId, String(b.amount)])),
+    cushion: false,
+    total: '',
+    adopted: [],
+  };
+  if (totalB) {
+    const sum = existing.filter((b) => b.categoryId).reduce((a, b) => a + b.amount, 0);
+    if (totalB.amount > sum + 0.005) { p.cushion = true; p.total = String(totalB.amount); }
+  }
+  const isEdit = Boolean(groupId);
+  let flash = new Set();
+  let lastAmounts = null;
+
+  // Si ya hay un plan para ese centro, se edita ese. Si hay presupuestos sueltos del mismo centro y período, se incorporan.
+  const adoptLoose = () => {
+    p.adopted = state.budgets.filter((b) => !b.groupId && b.costCenterId === p.costCenterId && b.period === p.period);
+    for (const b of p.adopted) if (b.categoryId && !p.amounts[b.categoryId]) p.amounts[b.categoryId] = String(b.amount);
+    const ref = p.adopted[0];
+    if (ref) Object.assign(p, { resetDay: ref.resetDay || p.resetDay, startDate: ref.startDate || p.startDate, endDate: ref.endDate || p.endDate });
+    const looseTotal = p.adopted.find((b) => !b.categoryId);
+    if (looseTotal) { p.cushion = true; p.total = String(looseTotal.amount); }
+  };
+  const otherPlan = (ccId) => state.budgets.find((b) => b.groupId && b.groupId !== p.groupId && b.costCenterId === ccId && !b.categoryId);
+
+  const sheet = openSheet({ title: isEdit ? 'Editar plan' : 'Nuevo plan', full: true, body: '', className: 'plan-sheet' });
+
+  const sumAmounts = () => Object.values(p.amounts).reduce((a, v) => a + (parseAmount(v) || 0), 0);
+  const totalHTML = () => {
+    const sum = sumAmounts();
+    const tot = p.cushion ? parseAmount(p.total) || 0 : sum;
+    const err = p.cushion && tot < sum;
+    return `<div class="plan-total-main"><span class="overline">Total del plan</span><b class="num">${money(tot, undefined, { hero: true })}</b></div>
+      ${p.cushion ? `<div class="plan-cushion"><span>Total con colchón</span><div class="amount-input sm"><span>${esc(currencyPrefix())}</span><input class="input num" data-total inputmode="decimal" value="${esc(p.total)}" placeholder="${Math.round(sum)}"></div></div>
+        ${err ? `<p class="field-error">El total no puede ser menor que la suma (${money(sum)})</p>` : tot > sum ? `<p class="muted small">Sin asignar: <b>${money(tot - sum)}</b></p>` : ''}` : ''}`;
+  };
+  const updateTotals = () => {
+    const box = sheet.body.querySelector('.plan-total');
+    if (box) {
+      const focused = document.activeElement?.matches('[data-total]');
+      if (!focused) box.innerHTML = totalHTML();
+      else {
+        const sum = sumAmounts(); const tot = parseAmount(p.total) || 0;
+        box.querySelector('.plan-total-main b').textContent = money(tot, undefined, { hero: true });
+        box.querySelector('.field-error, .muted.small')?.remove();
+        box.insertAdjacentHTML('beforeend', tot < sum ? `<p class="field-error">El total no puede ser menor que la suma (${money(sum)})</p>` : tot > sum ? `<p class="muted small">Sin asignar: <b>${money(tot - sum)}</b></p>` : '');
+      }
+    }
+    const n = Object.values(p.amounts).filter((v) => parseAmount(v) > 0).length;
+    const btn = sheet.body.querySelector('[data-plan="save"]');
+    if (btn) { btn.disabled = !n; btn.textContent = n ? `${isEdit ? 'Guardar plan' : 'Crear plan'} · ${n} ${n === 1 ? 'categoría' : 'categorías'}` : 'Pon al menos un monto'; }
+  };
+
+  const draw = () => {
+    const cc = costCenterById(p.costCenterId);
+    const avgs = historyAverages(p.costCenterId);
+    const factor = PERIOD_FACTOR[p.period];
+    const cats = visibleCategories();
+    sheet.setBody(`
+      <div class="field"><span>Centro de costo</span><div class="chip-row scroll">${state.costCenters.map((c) => `<button type="button" class="chip ${c.id === p.costCenterId ? 'on' : ''}" data-cc="${c.id}">${esc(c.emoji || '')} ${esc(c.name)}</button>`).join('')}</div></div>
+      <div class="field"><span>Período</span><div class="seg wrap">${[['weekly', 'Semanal'], ['biweekly', 'Quincenal'], ['monthly', 'Mensual'], ['yearly', 'Anual'], ['none', 'Fechas']].map(([v, l]) => `<button type="button" class="${p.period === v ? 'on' : ''}" data-period="${v}">${l}</button>`).join('')}</div></div>
+      ${p.period === 'monthly' ? `<div class="field"><span>Día de reinicio</span><div class="stepper"><button type="button" data-step="-1" aria-label="Menos">−</button><b>${p.resetDay}</b><button type="button" data-step="1" aria-label="Más">+</button><small>de cada mes</small></div></div>` : ''}
+      ${p.period === 'weekly' ? `<div class="field"><span>Reinicia el</span><div class="seg wrap">${WEEKDAYS.map((d, i) => `<button type="button" class="${(p.resetDay % 7) === i ? 'on' : ''}" data-weekday="${i}">${d.slice(0, 3)}</button>`).join('')}</div></div>` : ''}
+      ${p.period === 'biweekly' || p.period === 'yearly' ? `<label class="field"><span>Empieza el</span><input class="input" type="date" data-date="startDate" value="${p.startDate}"></label>` : ''}
+      ${p.period === 'none' ? `<div class="two"><label class="field"><span>Desde</span><input class="input" type="date" data-date="startDate" value="${p.startDate}"></label><label class="field"><span>Hasta</span><input class="input" type="date" data-date="endDate" value="${p.endDate}"></label></div>` : ''}
+      ${p.adopted.length && !isEdit ? `<p class="tip-card">🧩 <span>Incluí tus ${p.adopted.length} presupuestos sueltos de ${esc(cc.name)}. Al guardar quedan dentro de este plan.</span></p>` : ''}
+      <div class="plan-total">${totalHTML()}</div>
+      <div class="chip-row scroll plan-quick">
+        <button type="button" class="chip" data-plan="suggest" ${avgs && factor ? '' : 'disabled'} title="${avgs ? '' : 'Aún no hay historial suficiente'}">✨ Sugerir según mi historial</button>
+        <button type="button" class="chip ${p.cushion ? 'on' : ''}" data-plan="cushion">🫙 Colchón sin asignar</button>
+        <button type="button" class="chip" data-plan="clear">Limpiar</button>
+      </div>
+      ${!avgs ? '<p class="muted small">Sin historial de los últimos 3 meses en este centro: escribe los montos a mano.</p>' : ''}
+      <div class="card list-card plan-list">${cats.map((c, i) => {
+        const avg = avgs?.[c.id] && factor ? roundNice(avgs[c.id] * factor) : 0;
+        return `<label class="plan-line ${flash.has(c.id) ? 'flash' : ''}"><span class="avatar sm" style="--cat:var(--c${c.color})">${c.emoji}</span>
+          <span class="grow">${esc(c.name)}${avg ? `<button type="button" class="avg-btn" data-fill="${c.id}" data-v="${avg}">Prom.: ${money(avg)}</button>` : ''}</span>
+          <span class="amount-input sm"><span>${esc(currencyPrefix())}</span><input class="input num" data-cat-amt="${c.id}" data-i="${i}" inputmode="decimal" enterkeyhint="${i === cats.length - 1 ? 'done' : 'next'}" value="${esc(p.amounts[c.id] || '')}" placeholder="—"></span></label>`;
+      }).join('')}</div>
+      <button class="btn primary full big plan-save" data-plan="save"></button>
+      ${isEdit ? '<button class="btn danger-ghost full" data-plan="delete">Eliminar plan</button>' : ''}`);
+    flash = new Set();
+    updateTotals();
+  };
+
+  sheet.el.addEventListener('input', (e) => {
+    const id = e.target.dataset.catAmt;
+    if (id) { p.amounts[id] = e.target.value.replace(/[^\d.,]/g, ''); updateTotals(); return; }
+    if (e.target.matches('[data-total]')) { p.total = e.target.value.replace(/[^\d.,]/g, ''); updateTotals(); }
+  });
+  sheet.el.addEventListener('change', (e) => {
+    const d = e.target.dataset.date;
+    if (d) p[d] = e.target.value;
+    if (e.target.matches('[data-total]')) updateTotals();
+  });
+  sheet.el.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || !e.target.matches('[data-cat-amt]')) return;
+    e.preventDefault();
+    const next = sheet.body.querySelector(`[data-i="${Number(e.target.dataset.i) + 1}"]`);
+    if (next) { next.focus(); next.scrollIntoView({ block: 'center', behavior: 'smooth' }); } else e.target.blur();
+  });
+  sheet.el.addEventListener('click', async (e) => {
+    const cc = e.target.closest('[data-cc]');
+    if (cc) {
+      const other = otherPlan(cc.dataset.cc);
+      if (other && !isEdit) { sheet.close(); toast('Ese centro ya tiene un plan: ábrelo para editarlo'); setTimeout(() => openPlanEditor({ groupId: other.groupId }), 150); return; }
+      p.costCenterId = cc.dataset.cc;
+      if (!isEdit) { p.amounts = {}; adoptLoose(); }
+      draw(); return;
+    }
+    const per = e.target.closest('[data-period]');
+    if (per) {
+      p.period = per.dataset.period;
+      if (p.period === 'weekly') p.resetDay = 1;
+      if (p.period === 'monthly') p.resetDay = Math.min(28, Number(p.resetDay) || 1);
+      if (!isEdit) adoptLoose();
+      draw(); return;
+    }
+    const wd = e.target.closest('[data-weekday]');
+    if (wd) { p.resetDay = Number(wd.dataset.weekday); draw(); return; }
+    const st = e.target.closest('[data-step]');
+    if (st) { p.resetDay = Math.min(28, Math.max(1, Number(p.resetDay) + Number(st.dataset.step))); draw(); return; }
+    const fill = e.target.closest('[data-fill]');
+    if (fill) {
+      e.preventDefault();
+      p.amounts[fill.dataset.fill] = fill.dataset.v;
+      const input = sheet.body.querySelector(`[data-cat-amt="${fill.dataset.fill}"]`);
+      input.value = fill.dataset.v;
+      input.closest('.plan-line').classList.remove('flash'); void input.offsetWidth; input.closest('.plan-line').classList.add('flash');
+      updateTotals(); return;
+    }
+    const act = e.target.closest('[data-plan]')?.dataset.plan;
+    if (act === 'suggest') {
+      const avgs = historyAverages(p.costCenterId);
+      const factor = PERIOD_FACTOR[p.period];
+      if (!avgs || !factor) return;
+      lastAmounts = { ...p.amounts };
+      let n = 0;
+      for (const c of visibleCategories()) {
+        if (parseAmount(p.amounts[c.id]) > 0 || !avgs[c.id]) continue;
+        p.amounts[c.id] = String(roundNice(avgs[c.id] * factor));
+        flash.add(c.id); n++;
+      }
+      // Con colchón, el total sube si la suma lo supera.
+      if (p.cushion && (parseAmount(p.total) || 0) < sumAmounts()) p.total = String(Math.round(sumAmounts()));
+      draw();
+      toast(n ? `Sugerí ${n} ${n === 1 ? 'monto' : 'montos'} según tus últimos 3 meses` : 'No había categorías vacías con historial', n ? { undo: () => { p.amounts = lastAmounts; draw(); } } : {});
+    }
+    if (act === 'cushion') { p.cushion = !p.cushion; if (p.cushion && !p.total) p.total = String(Math.round(sumAmounts())); draw(); }
+    if (act === 'clear') { lastAmounts = { ...p.amounts }; p.amounts = {}; draw(); toast('Montos borrados', { undo: () => { p.amounts = lastAmounts; draw(); } }); }
+    if (act === 'delete') {
+      if (!(await confirmDialog({ title: 'Eliminar plan', text: 'Se eliminará el plan y los presupuestos de todas sus categorías. Tus gastos no se borran.', confirmText: 'Eliminar', danger: true }))) return;
+      state.budgets = state.budgets.filter((b) => b.groupId !== p.groupId);
+      save(); sheet.close(); toast('Plan eliminado');
+    }
+    if (act === 'save') savePlan();
+  });
+
+  const savePlan = async () => {
+    const entries = Object.entries(p.amounts).map(([id, v]) => [id, parseAmount(v)]).filter(([, v]) => v > 0);
+    if (!entries.length) { toast('Pon el monto de al menos una categoría'); return; }
+    if (p.period === 'none' && p.endDate < p.startDate) { toast('La fecha final debe ser posterior a la inicial'); return; }
+    const sum = entries.reduce((a, [, v]) => a + v, 0);
+    const total = p.cushion ? parseAmount(p.total) : sum;
+    if (total < sum - 0.005) { toast('El total no puede ser menor que la suma de las categorías'); return; }
+    const removed = existing.filter((b) => b.categoryId && !entries.some(([id]) => id === b.categoryId));
+    if (removed.length && !(await confirmDialog({
+      title: 'Quitar presupuestos',
+      text: `Se quitará el presupuesto de ${removed.map((b) => `“${esc(categoryById(b.categoryId).name)}”`).join(', ')}. Tus gastos no cambian.`,
+      confirmText: 'Quitar y guardar',
+    }))) return;
+    const cc = costCenterById(p.costCenterId);
+    const common = { costCenterId: p.costCenterId, period: p.period, resetDay: Number(p.resetDay) || 1, startDate: p.startDate, endDate: p.endDate, groupId: p.groupId };
+    const keepId = (catId) => existing.find((b) => (b.categoryId || null) === catId)?.id || p.adopted.find((b) => (b.categoryId || null) === catId)?.id || uid('p');
+    const next = [
+      { id: keepId(null), name: cc.name, categoryId: null, amount: Math.round(total * 100) / 100, ...common },
+      ...entries.map(([catId, amount]) => ({ id: keepId(catId), name: categoryById(catId).name, categoryId: catId, amount, ...common })),
+    ];
+    const drop = new Set([...existing, ...p.adopted].map((b) => b.id));
+    state.budgets = [...state.budgets.filter((b) => !drop.has(b.id)), ...next];
+    next.forEach((b) => animated.delete(b.id));
+    save();
+    sheet.close();
+    toast(isEdit ? 'Plan actualizado' : `Plan creado · ${entries.length} ${entries.length === 1 ? 'categoría' : 'categorías'}`);
+  };
+
+  if (!isEdit) {
+    const other = otherPlan(p.costCenterId);
+    if (other) { sheet.close(); setTimeout(() => openPlanEditor({ groupId: other.groupId }), 0); return; }
+    adoptLoose();
+  }
+  draw();
 }
 
 function openBudgetDetail(id) {
@@ -583,7 +871,7 @@ function openBudgetDetail(id) {
       prepareDraw(card);
       attachPaceTouch(card.querySelector('.pace-wrap'), s);
       setTimeout(() => { card.classList.add('play'); countUp(card.querySelector('.hero'), heroMoney); }, 250);
-      sheet.el.querySelector('[data-edit-budget]').addEventListener('click', () => { sheet.close(); openBudgetEditor(b); });
+      sheet.el.querySelector('[data-edit-budget]').addEventListener('click', () => { sheet.close(); if (b.groupId) openPlanEditor({ groupId: b.groupId }); else openBudgetEditor(b); });
     },
   });
 }
@@ -722,7 +1010,7 @@ function openExpenseForm({ expense = null, prefill = null, uncertain = {} } = {}
       <div class="meta-row">
         <label class="meta ${unsure.date ? 'unsure' : ''}"><span>Fecha</span><input type="date" value="${f.date}" data-f="date"></label>
         <button class="meta" data-act="cc"><span>Centro</span><b>${esc(costCenterById(f.costCenterId).name)}</b></button>
-        <button class="meta" data-act="method"><span>Método</span><b>${esc(f.paymentMethod || 'Opcional')}</b></button>
+        <button class="meta" data-act="method"><span>Medio</span><b>${esc(f.paymentMethod || 'Opcional')}</b></button>
       </div>
       <div class="keypad">${['1', '2', '3', '4', '5', '6', '7', '8', '9', ',', '0', 'del'].map((k) => `<button class="key" data-key="${k}" aria-label="${k === 'del' ? 'Borrar' : k === ',' ? 'Decimales' : k}">${k === 'del' ? icon('backspace') : k === ',' ? decimalSep() : k}</button>`).join('')}</div>
       <button class="btn primary full big" data-act="save">${isEdit ? 'Guardar cambios' : isPending ? 'Confirmar gasto' : 'Guardar'}</button>
@@ -797,7 +1085,7 @@ function openExpenseForm({ expense = null, prefill = null, uncertain = {} } = {}
       if (v) { f.costCenterId = v; draw(); }
     }
     if (act === 'method') {
-      const v = await pick({ title: 'Método de pago', options: [{ value: '', label: 'Sin especificar' }, ...PAYMENT_METHODS.map((m) => ({ value: m, label: m }))], selected: f.paymentMethod });
+      const v = await pickMethod({ title: 'Medio de pago', selected: f.paymentMethod });
       if (v !== undefined) { f.paymentMethod = v; draw(); }
     }
     if (act === 'save') submit(false);
@@ -826,26 +1114,52 @@ function openExpenseForm({ expense = null, prefill = null, uncertain = {} } = {}
   sheet.el.focus({ preventScroll: true });
 }
 
-// Recibo: una foto → formulario prellenado.
+// Aviso de modo demo o del proveedor activo.
+function aiBand() {
+  const p = currentProvider();
+  if (!hasApiKey()) return `<p class="demo-band">Modo demo: resultados de ejemplo. Agrega tu clave de ${esc(p.name)} en <button class="link-btn inline" data-action="settings">Ajustes</button> para lectura real.</p>`;
+  return `<p class="ai-band">${icon('key')} Lee con <b>${esc(modelLabel(p.id, currentModel()))}</b> · ${esc(p.company)}</p>`;
+}
+
+const readFiles = (files, mode, step, opts) => (hasApiKey() ? extractWithAI : extractDemo)(files, mode, step, opts);
+
+// Recibo: una foto → (recortar/tapar) → formulario prellenado.
 function openReceipt() {
-  const sheet = openSheet({
-    title: 'Escanear recibo',
-    body: `${!hasApiKey() ? '<p class="demo-band">Modo demo: resultados de ejemplo. Agrega tu clave en Ajustes para lectura real.</p>' : ''}
+  let entry = null;
+  const sheet = openSheet({ title: 'Escanear recibo', body: '' });
+  const drawPick = () => sheet.setBody(`${aiBand()}
       <div class="dropzone" id="rz">
         <div class="dz-inner"><span class="dz-emoji">🧾</span><b>Toma una foto del ticket</b><small>o elige una imagen o PDF</small>
           <div class="btn-row"><label class="btn primary">${icon('camera')} Cámara<input type="file" accept="image/*" capture="environment" hidden></label>
           <label class="btn ghost">${icon('upload')} Archivo<input type="file" accept="image/*,application/pdf" hidden></label></div></div>
-      </div>`,
-  });
-  sheet.body.querySelectorAll('input[type=file]').forEach((input) => input.addEventListener('change', async () => {
-    const file = input.files[0];
+      </div>`);
+  const drawPreview = () => sheet.setBody(`${aiBand()}
+      <div class="receipt-preview">${entry.url ? `<img src="${entry.url}" alt="Recibo">` : '<span class="dz-emoji">📄</span>'}${entry.edits ? '<span class="edited-badge">Editada</span>' : ''}</div>
+      <p class="hint center">${entry.url ? '¿Hay datos que no quieres enviar? Recorta o tapa antes de leer.' : 'Los PDF no se pueden editar aquí. Toma una captura si quieres tapar datos.'}</p>
+      <div class="btn-row two-btn">${entry.url ? `<button class="btn ghost" data-r="edit">${icon('pencil')} Editar</button>` : '<button class="btn ghost" data-r="other">Elegir otro</button>'}
+        <button class="btn primary" data-r="read">${entry.edits ? 'Leer recibo' : 'Usar así'}</button></div>`);
+  sheet.body.addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
     if (!file) return;
-    const zone = sheet.body.querySelector('#rz');
-    const thumb = file.type.startsWith('image/') ? `<img src="${URL.createObjectURL(file)}" alt="Recibo">` : '<span class="dz-emoji">📄</span>';
-    zone.innerHTML = `<div class="reading">${thumb}<p class="shimmer">Leyendo tu recibo…</p></div>`;
+    entry = { original: file, file, edits: null, url: file.type.startsWith('image/') ? URL.createObjectURL(file) : '' };
+    drawPreview();
+  });
+  sheet.body.addEventListener('click', async (e) => {
+    const r = e.target.closest('[data-r]')?.dataset.r;
+    if (r === 'other') { entry = null; drawPick(); }
+    if (r === 'edit') {
+      const res = await openImageEditor(entry.original, { edits: entry.edits });
+      if (res) { entry.file = res.file; entry.edits = res.edits; entry.url = URL.createObjectURL(res.file); drawPreview(); }
+    }
+    if (r === 'read') read();
+  });
+  const read = async () => {
+    const zone = sheet.body.querySelector('.receipt-preview');
+    sheet.body.querySelector('.btn-row').remove();
+    sheet.body.querySelector('.hint')?.remove();
+    zone.insertAdjacentHTML('afterend', '<p class="shimmer center">Leyendo tu recibo…</p>');
     try {
-      const fn = hasApiKey() ? extractWithClaude : extractDemo;
-      const result = await fn([file], 'receipt');
+      const result = await readFiles([entry.file], 'receipt');
       const mov = (result.movimientos || [])[0];
       if (!mov) throw new AiError(result.nota || 'No encontré un total en la imagen.');
       sheet.close();
@@ -859,41 +1173,64 @@ function openReceipt() {
       });
       if (mov.pregunta) toast(mov.pregunta);
     } catch (err) {
-      zone.innerHTML = `<div class="dz-inner"><span class="dz-emoji">😕</span><b>No pude leerlo</b><small>${esc(err instanceof AiError ? err.message : 'Ocurrió un error inesperado.')}</small></div>`;
       console.error(err);
+      sheet.body.querySelector('.shimmer')?.remove();
+      zone.insertAdjacentHTML('afterend', `<p class="error-box">😕 ${esc(err instanceof AiError ? err.message : 'Ocurrió un error inesperado.')}</p>
+        <div class="btn-row two-btn"><button class="btn ghost" data-r="other">Elegir otro</button><button class="btn primary" data-r="read">Intentar de nuevo</button></div>`);
     }
-  }));
+  };
+  drawPick();
 }
 
-// Ponerme al día: varios archivos → bandeja de revisión.
+// Ponerme al día: varios archivos → (recortar/tapar) → bandeja de revisión.
 function openBatch() {
-  const files = [];
+  const files = []; // { original, file, edits, url }
   let account = '';
   const sheet = openSheet({ title: 'Ponerme al día', full: true, body: '' });
-  const kind = (f) => (f.type.startsWith('image/') ? 'IMG' : f.name.toLowerCase().endsWith('.pdf') ? 'PDF' : /\.xlsx?$/i.test(f.name) ? 'XLS' : 'CSV');
+  const isImg = (f) => f.original.type.startsWith('image/');
+  const kind = (f) => (isImg(f) ? 'IMG' : f.original.name.toLowerCase().endsWith('.pdf') ? 'PDF' : /\.xlsx?$/i.test(f.original.name) ? 'XLS' : 'CSV');
   const draw = () => {
-    sheet.setBody(`${!hasApiKey() ? '<p class="demo-band">Modo demo: resultados de ejemplo. Agrega tu clave de Anthropic en Ajustes para lectura real.</p>' : ''}
+    const anyImg = files.some(isImg);
+    sheet.setBody(`${aiBand()}
       <p class="lead">Sube capturas de tus movimientos o el archivo que exporta tu banco. La IA separa cada movimiento y tú solo confirmas.</p>
-      <label class="dropzone big" id="bz">
+      <label class="dropzone ${files.length ? '' : 'big'}" id="bz">
         <input type="file" multiple accept="image/*,.pdf,.csv,.txt,.xls,.xlsx" hidden>
-        <div class="dz-inner"><span class="dz-emoji">📥</span><b>Toca para elegir archivos</b><small>Capturas, CSV, Excel o PDF · varios a la vez</small></div>
+        <div class="dz-inner"><span class="dz-emoji">📥</span><b>${files.length ? 'Agregar más archivos' : 'Toca para elegir archivos'}</b><small>Capturas, CSV, Excel o PDF · varios a la vez</small></div>
       </label>
-      ${files.length ? `<div class="thumbs">${files.map((f, i) => `<div class="thumb">${f.type.startsWith('image/') ? `<img src="${f.url}" alt="">` : `<span class="dz-emoji">${kind(f) === 'PDF' ? '📄' : '📊'}</span>`}
-        <span class="tag">${kind(f)}</span><button class="thumb-x" data-rm="${i}" aria-label="Quitar">${icon('x')}</button></div>`).join('')}</div>` : ''}
-      <div class="field"><span>¿De qué cuenta es? <small>(opcional)</small></span><button type="button" class="select-btn" data-act="account">${esc(account || 'Sin especificar')} ${icon('chevron')}</button></div>
+      ${anyImg && !state.settings.cropTipSeen ? `<div class="tip-card">🔒 <span><b>¿Hay datos sensibles?</b> Toca <b>Editar</b> para recortar o tapar antes de enviar. La imagen original no sale de tu teléfono.</span><button class="icon-btn sm" data-act="tip-x" aria-label="Cerrar aviso">${icon('x')}</button></div>` : ''}
+      ${files.length ? `<div class="thumbs">${files.map((f, i) => `<div class="thumb ${f.edits ? 'edited' : ''}">${isImg(f) ? `<img src="${f.url}" alt="">` : `<span class="dz-emoji">${kind(f) === 'PDF' ? '📄' : '📊'}</span>`}
+        <span class="tag">${f.edits ? '✓ Editada' : kind(f)}</span><button class="thumb-x" data-rm="${i}" aria-label="Quitar">${icon('x')}</button>
+        ${isImg(f) ? `<button class="thumb-edit" data-edit-img="${i}">${icon('pencil')} Editar</button>` : ''}</div>`).join('')}</div>` : ''}
+      <div class="field"><span>¿De qué medio de pago son? <small>(opcional)</small></span><button type="button" class="select-btn" data-act="account">${esc(account || 'La IA lo deduce')} ${icon('chevron')}</button></div>
       <div id="bprogress"></div>
       <button class="btn primary full big" data-act="read" ${files.length ? '' : 'disabled'}>${files.length ? `Leer ${files.length} ${files.length === 1 ? 'archivo' : 'archivos'}` : 'Elige al menos un archivo'}</button>`);
     sheet.body.querySelector('input[type=file]').addEventListener('change', (e) => {
-      for (const f of e.target.files) { f.url = f.type.startsWith('image/') ? URL.createObjectURL(f) : ''; files.push(f); }
+      for (const f of e.target.files) files.push({ original: f, file: f, edits: null, url: f.type.startsWith('image/') ? URL.createObjectURL(f) : '' });
       draw();
     });
   };
+
+  // Edita la imagen i y, con "Siguiente", continúa con las demás imágenes.
+  const editFrom = async (start) => {
+    const imgs = files.filter(isImg);
+    for (let k = imgs.indexOf(files[start]); k >= 0 && k < imgs.length; k++) {
+      const f = imgs[k];
+      const res = await openImageEditor(f.original, { edits: f.edits, index: k, total: imgs.length });
+      if (!res) break;
+      f.file = res.file; f.edits = res.edits; f.url = URL.createObjectURL(res.file);
+      draw();
+    }
+  };
+
   sheet.el.addEventListener('click', async (e) => {
     const rm = e.target.closest('[data-rm]');
     if (rm) { e.preventDefault(); files.splice(Number(rm.dataset.rm), 1); draw(); return; }
+    const ed = e.target.closest('[data-edit-img]');
+    if (ed) { e.preventDefault(); editFrom(Number(ed.dataset.editImg)); return; }
     const act = e.target.closest('[data-act]')?.dataset.act;
+    if (act === 'tip-x') { state.settings.cropTipSeen = true; save(); draw(); }
     if (act === 'account') {
-      const v = await pick({ title: '¿De qué cuenta es?', options: [{ value: '', label: 'Sin especificar' }, ...PAYMENT_METHODS.map((m) => ({ value: m, label: m }))], selected: account });
+      const v = await pickMethod({ title: '¿De qué medio de pago son?', selected: account });
       if (v !== undefined) { account = v; draw(); }
     }
     if (act === 'read') runBatch();
@@ -907,17 +1244,17 @@ function openBatch() {
     const steps = [];
     const step = (t) => { steps.push(t); prog.innerHTML = `<ul class="steps">${steps.map((s, i) => `<li class="${i === steps.length - 1 ? 'live' : 'done'}">${esc(s)}</li>`).join('')}</ul><div class="skeletons">${'<div class="skel"></div>'.repeat(4)}</div>`; };
     try {
-      const fn = hasApiKey() ? extractWithClaude : extractDemo;
-      const result = await fn(files, 'batch', step);
+      const result = await readFiles(files.map((f) => f.file), 'batch', step, { account });
       const movs = result.movimientos || [];
       step(`Encontré ${movs.length} ${movs.length === 1 ? 'movimiento' : 'movimientos'}`);
       const created = [];
       for (const m of movs) {
         const candidate = { amount: m.monto, date: m.fecha, currency: m.moneda };
         const dup = m.tipo === 'gasto' ? findDuplicate(candidate, created.map((c) => c.id)) : null;
+        const method = methodByName(m.metodo_pago) ? m.metodo_pago : account;
         const e = addExpenseSilently({
           date: m.fecha, merchant: m.comercio, description: m.descripcion, amount: m.monto, currency: m.moneda,
-          categoryId: m.categoria, paymentMethod: m.metodo_pago || account, status: 'pending', source: 'batch',
+          categoryId: m.categoria, paymentMethod: method, status: 'pending', source: 'batch',
           ai: { tipo: m.tipo, confianza: m.confianza, pregunta: m.pregunta, opciones: m.opciones, dupOf: dup?.id },
         });
         created.push(e);
@@ -949,14 +1286,152 @@ function addExpenseSilently(data) {
   return full;
 }
 
+// ---------------------------------------------------------------- Medios de pago
+
+const methodType = (id) => METHOD_TYPES.find((t) => t.id === id) || METHOD_TYPES[2];
+
+function methodSub(m) {
+  return [methodType(m.type).short, m.last4 ? `••${m.last4}` : '', m.owner].filter(Boolean).join(' · ');
+}
+
+function methodOption(m) {
+  return { value: m.name, label: m.name, emoji: methodType(m.type).emoji, color: 6, hint: methodSub(m) };
+}
+
+// Selector de medio de pago con opción de crear uno nuevo al vuelo. Devuelve el nombre o '' (sin especificar).
+async function pickMethod({ title, selected }) {
+  const v = await pick({
+    title,
+    options: [
+      { value: '', label: 'Sin especificar' },
+      ...paymentMethods().map(methodOption),
+      { value: '__new', label: 'Nuevo medio de pago', emoji: '＋', color: 6 },
+    ],
+    selected,
+  });
+  if (v !== '__new') return v;
+  const created = await openMethodEditor();
+  return created ? created.name : undefined;
+}
+
+function openPaymentMethods(onDone) {
+  const sheet = openSheet({ title: 'Medios de pago', full: true, body: '', onClose: onDone });
+  let showArchived = false;
+  const draw = () => {
+    const active = paymentMethods();
+    const archived = paymentMethods({ archived: true });
+    sheet.setBody(`<p class="lead">Tus tarjetas, cuentas y billeteras. La IA los usa para saber con qué pagaste cada movimiento.</p>
+      <div class="card list-card">${active.length ? active.map((m, i) => `<div class="set-row method-row">
+          <span class="order-btns"><button class="icon-btn sm" data-move="${m.id}" data-d="-1" ${i === 0 ? 'disabled' : ''} aria-label="Subir">${icon('up')}</button><button class="icon-btn sm" data-move="${m.id}" data-d="1" ${i === active.length - 1 ? 'disabled' : ''} aria-label="Bajar">${icon('down')}</button></span>
+          <button class="method-main" data-edit="${m.id}"><span class="avatar sm" style="--cat:var(--c6)">${methodType(m.type).emoji}</span>
+          <span class="grow">${esc(m.name)}<small>${esc(methodSub(m))}</small></span>${icon('chevron')}</button></div>`).join('')
+        : '<p class="widget-empty">Aún no tienes medios de pago</p>'}</div>
+      <button class="btn primary full" data-act="new">${icon('plus')} Agregar medio de pago</button>
+      ${archived.length ? `<button class="link-btn" data-act="toggle-arch">${showArchived ? 'Ocultar' : 'Ver'} archivados (${archived.length})</button>
+        ${showArchived ? `<div class="card list-card">${archived.map((m) => `<div class="set-row"><span class="avatar sm muted-av">${methodType(m.type).emoji}</span><span class="grow">${esc(m.name)}<small>${esc(methodSub(m))}</small></span>
+          <button class="btn ghost sm" data-restore="${m.id}">Restaurar</button></div>`).join('')}</div>` : ''}` : ''}`);
+  };
+  sheet.el.addEventListener('click', async (e) => {
+    const mv = e.target.closest('[data-move]');
+    if (mv) {
+      const list = state.paymentMethods;
+      const active = paymentMethods();
+      const i = active.findIndex((m) => m.id === mv.dataset.move);
+      const other = active[i + Number(mv.dataset.d)];
+      if (!other) return;
+      const a = list.indexOf(active[i]); const b = list.indexOf(other);
+      [list[a], list[b]] = [list[b], list[a]];
+      save(); draw(); return;
+    }
+    const ed = e.target.closest('[data-edit]');
+    if (ed) { await openMethodEditor(state.paymentMethods.find((m) => m.id === ed.dataset.edit)); draw(); return; }
+    const rs = e.target.closest('[data-restore]');
+    if (rs) { const m = state.paymentMethods.find((x) => x.id === rs.dataset.restore); if (m) { delete m.archived; save(); toast(`“${m.name}” restaurado`); draw(); } return; }
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (act === 'new') { await openMethodEditor(); draw(); }
+    if (act === 'toggle-arch') { showArchived = !showArchived; draw(); }
+  });
+  draw();
+}
+
+// Crea o edita un medio de pago. Devuelve el medio guardado o null.
+function openMethodEditor(existing) {
+  return new Promise((resolve) => {
+    const m = existing ? { ...existing } : { id: uid('pm'), name: '', type: 'credito', last4: '', owner: '' };
+    let saved = null;
+    const sheet = openSheet({ title: existing ? 'Editar medio de pago' : 'Nuevo medio de pago', className: 'tall', body: '', onClose: () => resolve(saved) });
+    const used = existing ? state.expenses.filter((e) => e.paymentMethod === existing.name).length : 0;
+    const draw = () => {
+      const digits = ['credito', 'debito', 'cuenta'].includes(m.type);
+      sheet.setBody(`<form class="form" id="mform" autocomplete="off">
+        <label class="field"><span>Nombre</span><input class="input" name="name" value="${esc(m.name)}" maxlength="28" placeholder="Ej. TDC BBVA" required><small class="field-error" hidden></small></label>
+        <div class="field"><span>Tipo</span><div class="chip-row wrap">${METHOD_TYPES.map((t) => `<button type="button" class="chip ${m.type === t.id ? 'on' : ''}" data-type="${t.id}">${t.emoji} ${t.name}</button>`).join('')}</div></div>
+        ${digits ? `<label class="field"><span>Últimos 4 dígitos <small>(opcional)</small></span><input class="input num" name="last4" value="${esc(m.last4)}" inputmode="numeric" maxlength="4" placeholder="1234"><small class="hint">Ayuda a la IA a reconocer tus estados de cuenta. Nunca escribas el número completo.</small></label>` : ''}
+        <label class="field"><span>Titular <small>(opcional)</small></span><input class="input" name="owner" value="${esc(m.owner)}" maxlength="24" placeholder="Ej. Betzabeth"><small class="hint">Útil si tu pareja tiene una tarjeta del mismo banco.</small></label>
+        <button class="btn primary full big" type="submit">Guardar</button>
+        ${existing ? `<button class="btn danger-ghost full" type="button" data-archive>${used ? 'Archivar' : 'Eliminar'}</button>
+          ${used ? `<p class="hint center">Tiene ${used} ${used === 1 ? 'gasto' : 'gastos'}: al archivarlo deja de aparecer en las listas, pero esos gastos lo conservan.</p>` : ''}` : ''}
+      </form>`);
+    };
+    sheet.el.addEventListener('input', (e) => {
+      if (!e.target.name) return;
+      m[e.target.name] = e.target.name === 'last4' ? e.target.value.replace(/\D/g, '') : e.target.value;
+      if (e.target.name === 'last4') e.target.value = m.last4;
+    });
+    sheet.el.addEventListener('click', async (e) => {
+      const t = e.target.closest('[data-type]');
+      if (t) { m.type = t.dataset.type; if (!['credito', 'debito', 'cuenta'].includes(m.type)) m.last4 = ''; draw(); return; }
+      if (e.target.closest('[data-archive]')) {
+        if (used) {
+          state.paymentMethods.find((x) => x.id === m.id).archived = true;
+          toast(`“${existing.name}” archivado`);
+        } else {
+          if (!(await confirmDialog({ title: 'Eliminar medio de pago', text: `Se eliminará “${esc(existing.name)}”.`, confirmText: 'Eliminar', danger: true }))) return;
+          state.paymentMethods = state.paymentMethods.filter((x) => x.id !== m.id);
+        }
+        save();
+        sheet.close();
+      }
+    });
+    sheet.el.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const name = m.name.trim();
+      const err = sheet.body.querySelector('.field-error');
+      const clash = state.paymentMethods.find((x) => x.id !== m.id && x.name.toLowerCase() === name.toLowerCase());
+      if (!name || clash) { err.hidden = false; err.textContent = clash ? 'Ya tienes un medio con ese nombre' : 'Ponle un nombre'; return; }
+      const clean = { ...m, name, last4: (m.last4 || '').slice(0, 4), owner: m.owner.trim() };
+      const i = state.paymentMethods.findIndex((x) => x.id === m.id);
+      if (i >= 0) {
+        const old = state.paymentMethods[i].name;
+        state.paymentMethods[i] = clean;
+        // Renombrar actualiza los gastos que lo usan.
+        if (old !== name) state.expenses.forEach((x) => { if (x.paymentMethod === old) x.paymentMethod = name; });
+      } else state.paymentMethods.push(clean);
+      save();
+      saved = clean;
+      toast(existing ? 'Medio de pago actualizado' : `“${name}” agregado`);
+      sheet.close();
+    });
+    draw();
+  });
+}
+
 // ---------------------------------------------------------------- Ajustes
 
 function openSettings() {
   const sheet = openSheet({ title: 'Ajustes', full: true, body: '' });
   let showKey = false;
+  const conn = {}; // resultado de "Probar conexión" por proveedor
+  const pill = (id) => {
+    if (!hasApiKey(id)) return '<span class="status-pill warn">Modo demo</span>';
+    if (conn[id] === 'testing') return '<span class="status-pill">Probando…</span>';
+    if (conn[id] === true) return '<span class="status-pill ok">Conectada ✓</span>';
+    if (typeof conn[id] === 'string') return `<span class="status-pill over">${esc(conn[id])}</span>`;
+    return '<span class="status-pill">Sin probar</span>';
+  };
   const draw = () => {
     const s = state.settings;
-    const model = MODELS.find((m) => m.id === s.model) || MODELS[0];
+    const p = currentProvider();
     sheet.setBody(`
       <h3 class="group-title">General</h3>
       <div class="card list-card">
@@ -967,14 +1442,23 @@ function openSettings() {
       <h3 class="group-title">Inteligencia artificial</h3>
       <div class="card list-card">
         <div class="set-row column">
-          <div class="set-line"><span>${icon('key')} Clave de API de Anthropic</span><span class="status-pill ${hasApiKey() ? 'ok' : 'warn'}">${hasApiKey() ? 'Conectada ✓' : 'Modo demo'}</span></div>
-          <div class="key-input"><input class="input" data-key-input type="${showKey ? 'text' : 'password'}" value="${esc(s.apiKey)}" placeholder="sk-ant-…" autocomplete="off" spellcheck="false">
-            <button class="btn ghost sm" data-act="toggle-key">${showKey ? 'Ocultar' : 'Ver'}</button></div>
-          <p class="hint">La clave se guarda solo en este dispositivo y se envía directo a Anthropic al leer capturas, recibos o archivos. Cada lectura tiene un costo en tu cuenta de Anthropic. No uses este prototipo en un equipo compartido.</p>
+          <span class="overline">Proveedor</span>
+          <div class="provider-seg">${PROVIDERS.map((x) => `<button class="${x.id === p.id ? 'on' : ''}" data-provider="${x.id}"><b>${esc(x.name)}${hasApiKey(x.id) ? '<i class="pdot"></i>' : ''}</b><small>${esc(x.company)} · ${x.id === 'google' ? 'plan gratis' : 'de pago'}</small></button>`).join('')}</div>
         </div>
-        <button class="set-row" data-act="model"><span>Modelo</span><b>${esc(model.name)}</b>${icon('chevron')}</button>
+        <div class="set-row column">
+          <div class="set-line"><span>${icon('key')} Clave de ${esc(p.company)}</span>${pill(p.id)}</div>
+          <div class="key-input"><input class="input" data-key-input type="${showKey ? 'text' : 'password'}" value="${esc(s.keys[p.id] || '')}" placeholder="${esc(p.keyHint)}" autocomplete="off" spellcheck="false">
+            <button class="btn ghost sm" data-act="toggle-key">${showKey ? 'Ocultar' : 'Ver'}</button></div>
+          <div class="key-actions"><button class="btn ghost sm" data-act="test" ${hasApiKey(p.id) ? '' : 'disabled'}>Probar conexión</button><span class="muted small">Obtén tu clave en <b>${esc(p.keyUrl)}</b></span></div>
+        </div>
+        <button class="set-row" data-act="model"><span>Modelo</span><b>${esc(modelLabel(p.id, currentModel()))}</b>${icon('chevron')}</button>
       </div>
-      <h3 class="group-title">Organización</h3>
+      <p class="privacy-note ${p.id === 'google' ? 'warn' : ''}">${p.id === 'google' ? '⚠️ ' : ''}${esc(p.privacy)}</p>
+      <p class="hint">Tus claves se guardan solo en este dispositivo y las imágenes van directo al proveedor que elijas. No uses este prototipo en un equipo compartido.</p>
+      <h3 class="group-title">Pagos</h3>
+      <div class="card list-card">
+        <button class="set-row" data-act="methods"><span>Medios de pago</span><b>${paymentMethods().length}</b>${icon('chevron')}</button>
+      </div>      <h3 class="group-title">Organización</h3>
       <div class="card list-card">
         <button class="set-row" data-act="categories"><span>Categorías</span><b>${visibleCategories().length} visibles</b>${icon('chevron')}</button>
         <button class="set-row" data-act="costcenters"><span>Centros de costo</span><b>${state.costCenters.length}</b>${icon('chevron')}</button>
@@ -985,21 +1469,24 @@ function openSettings() {
         <button class="set-row" data-act="sample"><span>Cargar datos de ejemplo</span>${icon('chevron')}</button>
         <button class="set-row danger" data-act="wipe"><span>Borrar todo</span>${icon('chevron')}</button>
       </div>
-      <p class="about">${logoSVG(36)}<span><b>Ritmo</b> · prototipo v0.1.0<br><small>Tus datos viven en este dispositivo.</small></span></p>`);
+      <p class="about">${logoSVG(36)}<span><b>Ritmo</b> · prototipo v0.2.0<br><small>Tus datos viven en este dispositivo.</small></span></p>`);
   };
   sheet.el.addEventListener('input', (e) => {
     if (e.target.matches('[data-name]')) { state.settings.name = e.target.value.slice(0, 30); save(); }
     if (e.target.matches('[data-key-input]')) {
-      state.settings.apiKey = e.target.value.trim();
+      const id = state.settings.provider;
+      state.settings.keys = { ...state.settings.keys, [id]: e.target.value.trim() };
+      delete conn[id];
       save();
-      const pill = sheet.body.querySelector('.set-line .status-pill');
-      pill.className = `status-pill ${hasApiKey() ? 'ok' : 'warn'}`;
-      pill.textContent = hasApiKey() ? 'Conectada ✓' : 'Modo demo';
+      sheet.body.querySelector('.set-line .status-pill').outerHTML = pill(id);
+      sheet.body.querySelector('[data-act="test"]').disabled = !hasApiKey(id);
     }
   });
   sheet.el.addEventListener('click', async (e) => {
     const theme = e.target.closest('[data-theme-set]');
     if (theme) { state.settings.theme = theme.dataset.themeSet; save(); applyTheme(); draw(); return; }
+    const prov = e.target.closest('[data-provider]');
+    if (prov) { state.settings.provider = prov.dataset.provider; showKey = false; save(); draw(); return; }
     const act = e.target.closest('[data-act]')?.dataset.act;
     if (!act) return;
     if (act === 'toggle-key') { showKey = !showKey; draw(); }
@@ -1013,14 +1500,22 @@ function openSettings() {
       }
     }
     if (act === 'model') {
-      const v = await pick({ title: 'Modelo de IA', options: MODELS.map((m) => ({ value: m.id, label: m.name, hint: m.note })), selected: state.settings.model });
-      if (v) { state.settings.model = v; save(); draw(); }
+      const p = currentProvider();
+      const v = await pick({ title: `Modelo de ${p.name}`, options: p.models.map((m, i) => ({ value: m.id, label: m.name, hint: i === 0 ? `Recomendado · ${m.note}` : m.note })), selected: currentModel() });
+      if (v) { state.settings.models = { ...state.settings.models, [p.id]: v }; save(); draw(); }
     }
+    if (act === 'test') {
+      const id = state.settings.provider;
+      conn[id] = 'testing'; draw();
+      try { await testConnection(id); conn[id] = true; } catch (err) { conn[id] = err instanceof AiError ? err.message : 'Error'; }
+      draw();
+    }
+    if (act === 'methods') openPaymentMethods(draw);
     if (act === 'categories') openCategories(draw);
     if (act === 'costcenters') openCostCenters(draw);
     if (act === 'customize') openCustomize();
     if (act === 'sample') {
-      if (!(await confirmDialog({ title: 'Cargar datos de ejemplo', text: 'Se reemplazarán tus gastos, presupuestos y centros de costo actuales por datos de ejemplo.', confirmText: 'Cargar ejemplo' }))) return;
+      if (!(await confirmDialog({ title: 'Cargar datos de ejemplo', text: 'Se reemplazarán tus gastos, presupuestos, medios de pago y centros de costo actuales por datos de ejemplo.', confirmText: 'Cargar ejemplo' }))) return;
       loadSampleData();
       animated.clear();
       sheet.close();
@@ -1167,7 +1662,9 @@ function onClick(e) {
     batch: openBatch,
     settings: openSettings,
     customize: openCustomize,
-    'new-budget': () => openBudgetEditor(),
+    'new-budget': openNewBudget,
+    'new-plan': () => openPlanEditor(),
+    'toggle-plan': () => { if (view.openPlans.has(id)) view.openPlans.delete(id); else view.openPlans.add(id); rerender(); },
     'open-budget': () => openBudgetDetail(id),
     'edit-expense': () => { const x = state.expenses.find((v) => v.id === id); if (x) openExpenseForm({ expense: x }); },
     'edit-pending': () => { const x = state.expenses.find((v) => v.id === id); if (x) openExpenseForm({ expense: x, uncertain: { categoryId: true } }); },

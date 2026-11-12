@@ -4,6 +4,13 @@ Prototipo navegable de una app de control de gastos personales. Se instala como 
 
 > Nombre provisional: "Ritmo". Es un prototipo para validar la experiencia, no el producto final.
 
+## Novedades de la v0.2.0
+
+- **Medios de pago propios**: tus tarjetas, cuentas y billeteras, con últimos 4 dígitos y titular opcionales.
+- **Recortar y tapar** capturas antes de enviarlas a la IA.
+- **Elige tu IA**: Claude, Gemini (tiene nivel gratuito) u OpenAI.
+- **Planes de presupuesto** por centro de costo: todas las categorías en una lista, montos sugeridos según tu historial y total en vivo.
+
 ## Qué incluye (v0.1.0)
 
 - **Inicio** con un carrusel de gráficos de ritmo por presupuesto. Cada gráfico muestra:
@@ -27,7 +34,10 @@ Prototipo navegable de una app de control de gastos personales. Se instala como 
 ## Inteligencia artificial
 
 - **Sin clave**, la app funciona en **modo demo**: devuelve resultados de ejemplo para probar el flujo.
-- **Con clave**: en *Ajustes → Inteligencia artificial* pega tu clave de la API de Anthropic. Las lecturas usan Claude con salida estructurada en JSON, a través del SDK oficial `@anthropic-ai/sdk`.
+- **Con clave**: en *Ajustes → Inteligencia artificial* elige el proveedor y pega su clave. Todos devuelven salida estructurada en JSON.
+  - **Claude** (Anthropic) usa el SDK oficial `@anthropic-ai/sdk`.
+  - **Gemini** (Google) y **OpenAI** usan sus API REST.
+- **Privacidad**: en el nivel gratuito de Gemini, Google puede usar lo que envías para mejorar sus productos. Tapa los datos sensibles antes de enviar.
 
 **Limitación conocida del prototipo:** la clave se guarda en el navegador y se envía directo a Anthropic. Sirve para pruebas personales, pero **no** es un diseño apto para usuarios reales. En el MVP la llamada a la IA debe pasar por un servidor propio.
 
@@ -53,7 +63,8 @@ css/styles.css        Estilos y tokens de diseño (claro/oscuro)
 js/app.js             Pantallas, navegación y flujos
 js/charts.js          Gráfico de ritmo y widgets del inicio
 js/budget.js          Períodos, acumulados, proyección y estados
-js/ai.js              Lectura con Claude y modo demo
+js/ai.js              Lectura con Claude, Gemini u OpenAI y modo demo
+js/imageeditor.js     Recortar y tapar imágenes antes de enviarlas
 js/store.js           Estado y persistencia local
 js/sample.js          Datos de ejemplo
 js/format.js          Formato de montos y fechas (es-MX/AR/VE)

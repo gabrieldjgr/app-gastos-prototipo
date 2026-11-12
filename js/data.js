@@ -34,8 +34,17 @@ export const CURRENCIES = [
   { code: 'EUR', name: 'Euro', symbol: '€', locale: 'es-ES' },
 ];
 
-export const PAYMENT_METHODS = [
-  'Efectivo', 'Débito', 'Crédito', 'Transferencia', 'Mercado Pago', 'Pago móvil', 'Zelle', 'Otro',
+// Tipos de medio de pago. Los medios concretos los configura cada persona (state.paymentMethods).
+export const METHOD_TYPES = [
+  { id: 'credito', name: 'Tarjeta de crédito', short: 'Crédito', emoji: '💳' },
+  { id: 'debito', name: 'Tarjeta de débito', short: 'Débito', emoji: '🏧' },
+  { id: 'cuenta', name: 'Cuenta', short: 'Cuenta', emoji: '🏦' },
+  { id: 'efectivo', name: 'Efectivo', short: 'Efectivo', emoji: '💵' },
+  { id: 'billetera', name: 'Billetera', short: 'Billetera', emoji: '📱' },
+];
+
+export const DEFAULT_METHODS = [
+  { id: 'pm-efectivo', name: 'Efectivo', type: 'efectivo', last4: '', owner: '' },
 ];
 
 export const PERIODS = [
