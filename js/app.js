@@ -1,4 +1,4 @@
-﻿// Ritmo Â· prototipo PWA de control de gastos.
+// Ritmo · prototipo PWA de control de gastos.
 import {
   state, save, subscribe, uid, allCategories, visibleCategories, categoryById, costCenterById,
   mostUsedCategories, addExpense, updateExpense, removeExpense, restoreExpense, confirmed, pending,
@@ -34,7 +34,7 @@ const view = {
 };
 const animated = new Set();
 
-const STATUS_TEXT = { ok: 'âœ“ En ritmo', warn: 'â–² Cerca del lÃ­mite', over: 'â— Sobre presupuesto' };
+const STATUS_TEXT = { ok: '✓ En ritmo', warn: '▲ Cerca del límite', over: '● Sobre presupuesto' };
 const TIPO_TEXT = { ingreso: 'Ingreso', transferencia: 'Transferencia', pago_tarjeta: 'Pago de tarjeta' };
 
 // ---------------------------------------------------------------- Arranque
@@ -65,14 +65,14 @@ function renderOnboarding() {
   app.innerHTML = `<main class="onboarding">
     <div class="ob-logo">${logoSVG()}</div>
     <h1 class="ob-title">Ritmo</h1>
-    <p class="ob-sub">Tus gastos, al dÃ­a en minutos. Sube capturas del banco y mira si vas al ritmo de tu presupuesto.</p>
-    <p class="ob-q">Â¿En quÃ© moneda piensas?</p>
+    <p class="ob-sub">Tus gastos, al día en minutos. Sube capturas del banco y mira si vas al ritmo de tu presupuesto.</p>
+    <p class="ob-q">¿En qué moneda piensas?</p>
     <div class="chip-row center" id="ob-cur">${['MXN', 'ARS', 'VES', 'USD'].map((c) => `<button class="chip ${c === currency ? 'on' : ''}" data-cur="${c}">${c}</button>`).join('')}</div>
     <div class="ob-actions">
       <button class="btn primary big" id="ob-sample">Empezar con datos de ejemplo</button>
       <button class="btn ghost big" id="ob-blank">Empezar en blanco</button>
     </div>
-    <p class="ob-foot">Prototipo Â· tus datos se guardan solo en este dispositivo.</p>
+    <p class="ob-foot">Prototipo · tus datos se guardan solo en este dispositivo.</p>
   </main>`;
   app.querySelector('#ob-cur').addEventListener('click', (e) => {
     const b = e.target.closest('[data-cur]');
@@ -183,19 +183,19 @@ function renderHome() {
   const pend = pending().length;
   const last = state.lastBatchAt ? daysAgo(state.lastBatchAt) : null;
   const name = state.settings.name ? `, ${esc(state.settings.name)}` : '';
-  let html = topbar(`Hola${name} ðŸ‘‹`, {
+  let html = topbar(`Hola${name} 👋`, {
     overline: monthName(today),
     action: `<button class="icon-btn" data-action="settings" aria-label="Ajustes">${icon('gear')}</button>`,
   });
-  if (pend > 0) html += `<button class="notice accent" data-action="tab" data-tab="review"><span>ðŸ“¥</span><span><b>${pend} ${pend === 1 ? 'movimiento' : 'movimientos'}</b> por revisar</span>${icon('chevron')}</button>`;
+  if (pend > 0) html += `<button class="notice accent" data-action="tab" data-tab="review"><span>📥</span><span><b>${pend} ${pend === 1 ? 'movimiento' : 'movimientos'}</b> por revisar</span>${icon('chevron')}</button>`;
   if (state.expenses.length && (last === null || last >= 4)) {
-    html += `<button class="notice" data-action="batch"><span>â°</span><span>${last === null ? 'AÃºn no te pones al dÃ­a con tu banco' : `Hace ${last} dÃ­as que no te pones al dÃ­a`}</span>${icon('chevron')}</button>`;
+    html += `<button class="notice" data-action="batch"><span>⏰</span><span>${last === null ? 'Aún no te pones al día con tu banco' : `Hace ${last} días que no te pones al día`}</span>${icon('chevron')}</button>`;
   }
   for (const w of state.dashboard) {
     if (!w.on) continue;
     if (w.id === 'pace') html += paceCarousel();
-    if (w.id === 'categories') html += widget('Por categorÃ­a', categoryBars(), monthName(today));
-    if (w.id === 'trend') html += widget('EvoluciÃ³n', trendBars(view.trendMode));
+    if (w.id === 'categories') html += widget('Por categoría', categoryBars(), monthName(today));
+    if (w.id === 'trend') html += widget('Evolución', trendBars(view.trendMode));
     if (w.id === 'costcenters') html += widget('Centros de costo', costCenterRows());
     if (w.id === 'merchants') html += widget('Top comercios', topMerchants());
   }
@@ -266,7 +266,7 @@ function carouselStep(d) {
 const PERIOD_FILTERS = [
   { value: 'month', label: 'Este mes' },
   { value: 'last', label: 'Mes pasado' },
-  { value: '90', label: 'Ãšltimos 90 dÃ­as' },
+  { value: '90', label: 'Últimos 90 días' },
   { value: 'all', label: 'Todo' },
 ];
 
@@ -275,10 +275,10 @@ function renderExpenses() {
   const chip = (key, label, value, active) => `<button class="chip filter ${active ? 'on' : ''}" data-action="filter" data-key="${key}">${esc(value || label)}${active && key !== 'period' ? `<span class="chip-x" data-action="filter-clear" data-key="${key}">${icon('x')}</span>` : ''}</button>`;
   const periodLabel = PERIOD_FILTERS.find((p) => p.value === f.period).label;
   return `${topbar('Gastos')}
-    <div class="search-bar"><label class="search">${icon('search')}<input id="search" type="search" placeholder="Buscar comercio o descripciÃ³n" value="${esc(f.q)}" autocomplete="off"></label>
+    <div class="search-bar"><label class="search">${icon('search')}<input id="search" type="search" placeholder="Buscar comercio o descripción" value="${esc(f.q)}" autocomplete="off"></label>
       <div class="chip-row scroll">
-        ${chip('period', 'PerÃ­odo', periodLabel, true)}
-        ${chip('category', 'CategorÃ­a', f.category ? categoryById(f.category).name : '', !!f.category)}
+        ${chip('period', 'Período', periodLabel, true)}
+        ${chip('category', 'Categoría', f.category ? categoryById(f.category).name : '', !!f.category)}
         ${chip('cc', 'Centro', f.cc ? costCenterById(f.cc).name : '', !!f.cc)}
         ${chip('method', 'Medio', f.method || '', !!f.method)}
       </div>
@@ -310,8 +310,8 @@ function renderExpenseList() {
   const list = filteredExpenses();
   if (!list.length) {
     host.innerHTML = state.expenses.length
-      ? emptyState('ðŸ”', 'Nada por aquÃ­', 'No hay gastos con estos filtros.')
-      : emptyState('ðŸ§¾', 'AÃºn no hay gastos', 'Sube una captura de tu banco o agrega tu primer gasto.', '<button class="btn primary" data-action="add-menu">Agregar gasto</button>');
+      ? emptyState('🔍', 'Nada por aquí', 'No hay gastos con estos filtros.')
+      : emptyState('🧾', 'Aún no hay gastos', 'Sube una captura de tu banco o agrega tu primer gasto.', '<button class="btn primary" data-action="add-menu">Agregar gasto</button>');
     return;
   }
   const groups = new Map();
@@ -326,7 +326,7 @@ function renderExpenseList() {
       ${items.map(expenseRow).join('')}</section>`;
   }
   const total = list.reduce((s, e) => s + e.amountBase, 0);
-  html += `<p class="list-foot">${list.length} ${list.length === 1 ? 'gasto' : 'gastos'} Â· <b class="num">${money(total)}</b></p>`;
+  html += `<p class="list-foot">${list.length} ${list.length === 1 ? 'gasto' : 'gastos'} · <b class="num">${money(total)}</b></p>`;
   host.innerHTML = html;
   host.querySelectorAll('.row.swipe').forEach((row) => {
     swipeable(row, { onLeft: () => deleteExpense(row.dataset.id, row) });
@@ -341,7 +341,7 @@ function expenseRow(e) {
     <div class="swipe-bg left">${icon('trash')}<span>Eliminar</span></div>
     <div class="swipe-content" data-action="edit-expense" data-id="${e.id}">
       <span class="avatar" style="--cat:var(--c${c.color})">${c.emoji}</span>
-      <span class="row-main"><span class="row-title">${esc(e.merchant || e.description || 'Gasto')}</span><span class="row-sub">${esc(c.name)} Â· ${esc(cc?.name || '')}</span></span>
+      <span class="row-main"><span class="row-title">${esc(e.merchant || e.description || 'Gasto')}</span><span class="row-sub">${esc(c.name)} · ${esc(cc?.name || '')}</span></span>
       <span class="row-amt"><span class="num">${money(e.amountBase)}</span>${foreign ? `<small>${money(e.amount, e.currency)}</small>` : ''}</span>
     </div>
   </div>`;
@@ -356,8 +356,8 @@ async function deleteExpense(id, rowEl) {
 async function chooseFilter(key) {
   const f = view.filters;
   let value;
-  if (key === 'period') value = await pick({ title: 'PerÃ­odo', options: PERIOD_FILTERS, selected: f.period });
-  if (key === 'category') value = await pick({ title: 'CategorÃ­a', options: visibleCategories().map((c) => ({ value: c.id, label: c.name, emoji: c.emoji, color: c.color })), selected: f.category });
+  if (key === 'period') value = await pick({ title: 'Período', options: PERIOD_FILTERS, selected: f.period });
+  if (key === 'category') value = await pick({ title: 'Categoría', options: visibleCategories().map((c) => ({ value: c.id, label: c.name, emoji: c.emoji, color: c.color })), selected: f.category });
   if (key === 'cc') value = await pick({ title: 'Centro de costo', options: state.costCenters.map((c) => ({ value: c.id, label: c.name, emoji: c.emoji })), selected: f.cc });
   if (key === 'method') value = await pick({ title: 'Medio de pago', options: state.paymentMethods.map(methodOption), selected: f.method });
   if (value === undefined) return;
@@ -380,7 +380,7 @@ function renderReview() {
   const { pend, needs, ready, notExpense } = reviewGroups();
   if (!pend.length) {
     view.reviewBase = 0;
-    return `${topbar('Revisar')}${emptyState('âœ…', 'Â¡EstÃ¡s al dÃ­a!', 'Cuando subas capturas o archivos del banco, los movimientos aparecerÃ¡n aquÃ­ para que los confirmes en segundos.', '<button class="btn primary" data-action="batch">Ponerme al dÃ­a</button>')}`;
+    return `${topbar('Revisar')}${emptyState('✅', '¡Estás al día!', 'Cuando subas capturas o archivos del banco, los movimientos aparecerán aquí para que los confirmes en segundos.', '<button class="btn primary" data-action="batch">Ponerme al día</button>')}`;
   }
   view.reviewBase = Math.max(view.reviewBase, pend.length);
   const progress = 1 - pend.length / view.reviewBase;
@@ -406,7 +406,7 @@ function renderReview() {
   return html;
 }
 
-// Tarjetas o cuentas que aparecen en los movimientos pero no estÃ¡n registradas.
+// Tarjetas o cuentas que aparecen en los movimientos pero no están registradas.
 function unknownCards(pend) {
   const ignored = state.settings.ignoredCards || [];
   const map = new Map();
@@ -419,10 +419,10 @@ function unknownCards(pend) {
 }
 
 function unknownCardNotice({ last4, count }) {
-  return `<div class="card proactive-card"><span class="proactive-emoji">ðŸ’³</span>
-    <div class="proactive-main"><b>No reconocÃ­ la tarjeta â€¢â€¢${last4}</b>
-      <small>Aparece en ${count} ${count === 1 ? 'movimiento' : 'movimientos'}. Si la agregas, se los asigno y la prÃ³xima vez la reconozco sola.</small>
-      <div class="btn-row"><button class="btn primary sm" data-action="add-card" data-id="${last4}">Agregar tarjeta</button><button class="btn ghost sm" data-action="ignore-card" data-id="${last4}">No es mÃ­a</button></div></div></div>`;
+  return `<div class="card proactive-card"><span class="proactive-emoji">💳</span>
+    <div class="proactive-main"><b>No reconocí la tarjeta ••${last4}</b>
+      <small>Aparece en ${count} ${count === 1 ? 'movimiento' : 'movimientos'}. Si la agregas, se los asigno y la próxima vez la reconozco sola.</small>
+      <div class="btn-row"><button class="btn primary sm" data-action="add-card" data-id="${last4}">Agregar tarjeta</button><button class="btn ghost sm" data-action="ignore-card" data-id="${last4}">No es mía</button></div></div></div>`;
 }
 
 async function addUnknownCard(last4) {
@@ -431,13 +431,13 @@ async function addUnknownCard(last4) {
   let n = 0;
   for (const e of state.expenses) if (e.status === 'pending' && e.ai?.last4 === last4) { e.paymentMethod = created.name; n++; }
   save();
-  toast(`â€œ${created.name}â€ asignada a ${n} ${n === 1 ? 'movimiento' : 'movimientos'}`);
+  toast(`“${created.name}” asignada a ${n} ${n === 1 ? 'movimiento' : 'movimientos'}`);
 }
 
 function ignoreUnknownCard(last4) {
   state.settings.ignoredCards = [...(state.settings.ignoredCards || []), last4];
   save();
-  toast(`No volverÃ© a preguntar por â€¢â€¢${last4}`, { undo: () => { state.settings.ignoredCards = state.settings.ignoredCards.filter((x) => x !== last4); save(); } });
+  toast(`No volveré a preguntar por ••${last4}`, { undo: () => { state.settings.ignoredCards = state.settings.ignoredCards.filter((x) => x !== last4); save(); } });
 }
 
 function sourceLabel(e) {
@@ -452,15 +452,15 @@ function needsCard(e) {
     <div class="swipe-content">
       <div class="r-top">
         <span class="avatar" style="--cat:var(--c${c.color})">${c.emoji}</span>
-        <span class="row-main"><span class="row-title">${esc(e.merchant || e.description)}</span><span class="row-sub">${dateShort(e.date)} Â· ${esc(c.name)}</span></span>
+        <span class="row-main"><span class="row-title">${esc(e.merchant || e.description)}</span><span class="row-sub">${dateShort(e.date)} · ${esc(c.name)}</span></span>
         <span class="row-amt"><span class="num">${money(e.amount, e.currency)}</span></span>
       </div>
       ${dup ? `<div class="dup"><span class="tag warn">Posible duplicado</span>
-          <p class="dup-text">Ya tienes <b>${esc(dup.merchant)}</b> Â· ${dateShort(dup.date)} Â· ${money(dup.amount, dup.currency)}</p>
+          <p class="dup-text">Ya tienes <b>${esc(dup.merchant)}</b> · ${dateShort(dup.date)} · ${money(dup.amount, dup.currency)}</p>
           <div class="btn-row"><button class="btn ghost sm" data-action="dup-same" data-id="${e.id}">Es el mismo</button><button class="btn ghost sm" data-action="dup-two" data-id="${e.id}">Son dos</button></div></div>` : ''}
       ${e.ai?.pregunta ? `<div class="ai-q"><p class="bubble">${esc(e.ai.pregunta)}</p>
           <div class="chip-row">${(e.ai.opciones?.length ? e.ai.opciones : [e.categoryId]).map((id) => { const oc = categoryById(id); return `<button class="chip answer" data-action="answer" data-id="${e.id}" data-cat="${id}">${oc.emoji} ${esc(oc.name)}</button>`; }).join('')}
-          <button class="chip answer" data-action="edit-pending" data-id="${e.id}">Otraâ€¦</button></div></div>` : ''}
+          <button class="chip answer" data-action="edit-pending" data-id="${e.id}">Otra…</button></div></div>` : ''}
       <div class="r-actions">
         <button class="round-btn" data-action="discard" data-id="${e.id}" aria-label="Descartar">${icon('x')}</button>
         <button class="round-btn ok" data-action="confirm" data-id="${e.id}" aria-label="Confirmar">${icon('check')}</button>
@@ -477,12 +477,12 @@ function readyRow(e) {
     <div class="swipe-content">
       <div class="r-line" data-action="expand" data-id="${e.id}">
         <span class="avatar" style="--cat:var(--c${c.color})">${c.emoji}</span>
-        <span class="row-main"><span class="row-title">${esc(e.merchant || e.description)}</span><span class="row-sub">${esc(c.name)} Â· ${dateShort(e.date)}</span></span>
+        <span class="row-main"><span class="row-title">${esc(e.merchant || e.description)}</span><span class="row-sub">${esc(c.name)} · ${dateShort(e.date)}</span></span>
         <span class="row-amt"><span class="num">${money(e.amount, e.currency)}</span></span>
         <button class="mini-btn" data-action="confirm" data-id="${e.id}" aria-label="Confirmar">${icon('check')}</button>
       </div>
       ${open ? `<div class="inline-edit">
-        <label>CategorÃ­a<select data-field="categoryId" data-id="${e.id}">${visibleCategories().map((x) => `<option value="${x.id}" ${x.id === e.categoryId ? 'selected' : ''}>${x.emoji} ${esc(x.name)}</option>`).join('')}</select></label>
+        <label>Categoría<select data-field="categoryId" data-id="${e.id}">${visibleCategories().map((x) => `<option value="${x.id}" ${x.id === e.categoryId ? 'selected' : ''}>${x.emoji} ${esc(x.name)}</option>`).join('')}</select></label>
         <label>Centro<select data-field="costCenterId" data-id="${e.id}">${state.costCenters.map((x) => `<option value="${x.id}" ${x.id === e.costCenterId ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
         <label>Fecha<input type="date" data-field="date" data-id="${e.id}" value="${e.date}"></label>
         <button class="btn ghost sm" data-action="discard" data-id="${e.id}">Descartar</button>
@@ -494,10 +494,10 @@ function readyRow(e) {
 function notExpenseRow(e) {
   return `<div class="row" data-id="${e.id}">
     <div class="swipe-content static">
-      <span class="avatar" style="--cat:var(--c11)">${e.ai.tipo === 'ingreso' ? 'ðŸ’°' : e.ai.tipo === 'pago_tarjeta' ? 'ðŸ’³' : 'ðŸ”'}</span>
+      <span class="avatar" style="--cat:var(--c11)">${e.ai.tipo === 'ingreso' ? '💰' : e.ai.tipo === 'pago_tarjeta' ? '💳' : '🔁'}</span>
       <span class="row-main"><span class="row-title">${esc(e.merchant || e.description)}</span><span class="row-sub"><span class="tag">${TIPO_TEXT[e.ai.tipo] || 'Otro'}</span> ${dateShort(e.date)}</span></span>
       <span class="row-amt"><span class="num">${money(e.amount, e.currency)}</span></span>
-      <button class="btn ghost sm" data-action="is-expense" data-id="${e.id}">SÃ­ es gasto</button>
+      <button class="btn ghost sm" data-action="is-expense" data-id="${e.id}">Sí es gasto</button>
     </div>
   </div>`;
 }
@@ -539,7 +539,7 @@ function afterReviewAction(had) {
   if (had > 0 && pending().length === 0) {
     confetti();
     vibrate([10, 40, 10]);
-    toast('Â¡Al dÃ­a! ðŸŽ‰');
+    toast('¡Al día! 🎉');
   }
 }
 
@@ -567,12 +567,12 @@ function discardNonExpense() {
 // ---------------------------------------------------------------- Presupuestos
 
 function periodText(b) {
-  if (b.period === 'monthly') return `Mensual Â· reinicia el ${b.resetDay || 1}`;
-  if (b.period === 'weekly') return `Semanal Â· reinicia el ${WEEKDAYS[(b.resetDay || 1) % 7].toLowerCase()}`;
+  if (b.period === 'monthly') return `Mensual · reinicia el ${b.resetDay || 1}`;
+  if (b.period === 'weekly') return `Semanal · reinicia el ${WEEKDAYS[(b.resetDay || 1) % 7].toLowerCase()}`;
   if (b.period === 'biweekly') return 'Quincenal';
   if (b.period === 'yearly') return 'Anual';
   const { start, end } = budgetWindow(b);
-  return `Sin periodicidad Â· ${dateRange(start, end)}`;
+  return `Sin periodicidad · ${dateRange(start, end)}`;
 }
 
 function budgetCard(b) {
@@ -580,15 +580,15 @@ function budgetCard(b) {
   const cc = costCenterById(b.costCenterId);
   const cat = b.categoryId ? categoryById(b.categoryId) : null;
   return `<button class="card budget-card" data-action="open-budget" data-id="${b.id}">
-    <div class="bc-top"><span class="avatar sm" style="--cat:var(--c${cat ? cat.color : 6})">${cat ? cat.emoji : cc.emoji || 'ðŸŽ¯'}</span>
+    <div class="bc-top"><span class="avatar sm" style="--cat:var(--c${cat ? cat.color : 6})">${cat ? cat.emoji : cc.emoji || '🎯'}</span>
       <span class="row-main"><span class="row-title">${esc(b.name)}</span><span class="chip mini">${esc(periodText(b))}</span></span>
       <span class="status-pill ${s.status}">${STATUS_TEXT[s.status]}</span></div>
     ${progressWithNotch(s)}
-    <div class="bc-foot"><span><b class="num">${money(s.spent, undefined, { hero: true })}</b> de ${money(s.amount, undefined, { hero: true })}</span><span class="muted">${s.daysLeft > 0 ? `Quedan ${s.daysLeft} ${s.daysLeft === 1 ? 'dÃ­a' : 'dÃ­as'}` : 'Cerrado'}</span></div>
+    <div class="bc-foot"><span><b class="num">${money(s.spent, undefined, { hero: true })}</b> de ${money(s.amount, undefined, { hero: true })}</span><span class="muted">${s.daysLeft > 0 ? `Quedan ${s.daysLeft} ${s.daysLeft === 1 ? 'día' : 'días'}` : 'Cerrado'}</span></div>
   </button>`;
 }
 
-// Tarjeta agrupada de un plan: total del centro de costo + filas por categorÃ­a.
+// Tarjeta agrupada de un plan: total del centro de costo + filas por categoría.
 function planCard(groupId) {
   const list = state.budgets.filter((b) => b.groupId === groupId);
   const total = list.find((b) => !b.categoryId);
@@ -606,29 +606,29 @@ function planCard(groupId) {
     const pct = Math.min(100, (st.spent / Math.max(st.amount, 1)) * 100);
     const left = st.amount - st.spent;
     return `<button class="plan-row" data-action="open-budget" data-id="${b.id}"><span class="avatar xs" style="--cat:var(--c${cat.color})">${cat.emoji}</span>
-      <span class="plan-row-main"><span class="plan-row-top"><span>${esc(cat.name)}</span><span class="num ${left < 0 ? 'over-text' : 'muted'}">${left < 0 ? `${money(-left)} de mÃ¡s` : `quedan ${money(left)}`}</span></span>
+      <span class="plan-row-main"><span class="plan-row-top"><span>${esc(cat.name)}</span><span class="num ${left < 0 ? 'over-text' : 'muted'}">${left < 0 ? `${money(-left)} de más` : `quedan ${money(left)}`}</span></span>
       <span class="cat-bar"><i class="${st.status}" style="width:${pct.toFixed(1)}%"></i></span></span></button>`;
   };
   return `<div class="card plan-card">
     <button class="plan-head" data-action="open-budget" data-id="${total.id}">
-      <div class="bc-top"><span class="avatar sm" style="--cat:var(--c6)">${costCenterById(total.costCenterId).emoji || 'ðŸŽ¯'}</span>
-        <span class="row-main"><span class="row-title">Plan Â· ${esc(total.name)}</span><span class="chip mini">${esc(periodText(total))}</span></span>
+      <div class="bc-top"><span class="avatar sm" style="--cat:var(--c6)">${costCenterById(total.costCenterId).emoji || '🎯'}</span>
+        <span class="row-main"><span class="row-title">Plan · ${esc(total.name)}</span><span class="chip mini">${esc(periodText(total))}</span></span>
         <span class="status-pill ${s.status}">${STATUS_TEXT[s.status]}</span></div>
       ${progressWithNotch(s)}
-      <div class="bc-foot"><span><b class="num">${money(s.spent, undefined, { hero: true })}</b> de ${money(s.amount, undefined, { hero: true })}</span><span class="muted">${s.daysLeft > 0 ? `Quedan ${s.daysLeft} ${s.daysLeft === 1 ? 'dÃ­a' : 'dÃ­as'}` : 'Cerrado'}</span></div>
+      <div class="bc-foot"><span><b class="num">${money(s.spent, undefined, { hero: true })}</b> de ${money(s.amount, undefined, { hero: true })}</span><span class="muted">${s.daysLeft > 0 ? `Quedan ${s.daysLeft} ${s.daysLeft === 1 ? 'día' : 'días'}` : 'Cerrado'}</span></div>
     </button>
     <div class="plan-rows">${shown.map(row).join('')}
-      ${unassigned > 0 ? `<div class="plan-row static"><span class="avatar xs" style="--cat:var(--c11)">ðŸ«™</span><span class="plan-row-main"><span class="plan-row-top"><span>Sin asignar</span><span class="num muted">${money(spentUnassigned)} de ${money(unassigned)}</span></span>
+      ${unassigned > 0 ? `<div class="plan-row static"><span class="avatar xs" style="--cat:var(--c11)">🫙</span><span class="plan-row-main"><span class="plan-row-top"><span>Sin asignar</span><span class="num muted">${money(spentUnassigned)} de ${money(unassigned)}</span></span>
         <span class="cat-bar"><i class="${spentUnassigned > unassigned ? 'over' : 'ok'}" style="width:${Math.min(100, (spentUnassigned / unassigned) * 100).toFixed(1)}%"></i></span></span></div>` : ''}
     </div>
-    ${rows.length > 4 ? `<button class="link-btn plan-more" data-action="toggle-plan" data-id="${groupId}">${open ? 'Ver menos' : `Ver ${rows.length - 4} mÃ¡s`}</button>` : ''}
+    ${rows.length > 4 ? `<button class="link-btn plan-more" data-action="toggle-plan" data-id="${groupId}">${open ? 'Ver menos' : `Ver ${rows.length - 4} más`}</button>` : ''}
   </div>`;
 }
 
 function renderBudgets() {
   let html = topbar('Presupuestos', { action: `<button class="btn primary sm" data-action="new-budget">${icon('plus')} Nuevo</button>` });
   if (!state.budgets.length) {
-    return html + emptyState('ðŸŽ¯', 'Sin presupuestos todavÃ­a', 'Arma un plan por centro de costo: pones cuÃ¡nto quieres gastar en cada categorÃ­a y la app te dice si vas al ritmo.', '<button class="btn primary" data-action="new-plan">Crear un plan</button>');
+    return html + emptyState('🎯', 'Sin presupuestos todavía', 'Arma un plan por centro de costo: pones cuánto quieres gastar en cada categoría y la app te dice si vas al ritmo.', '<button class="btn primary" data-action="new-plan">Crear un plan</button>');
   }
   for (const cc of state.costCenters) {
     const list = state.budgets.filter((b) => b.costCenterId === cc.id);
@@ -645,8 +645,8 @@ function openNewBudget() {
   const sheet = openSheet({
     title: 'Nuevo presupuesto',
     body: `<div class="add-options">
-      <button class="add-opt main" data-opt="plan"><span class="add-emoji">ðŸ—‚ï¸</span><span><b>Plan por centro de costo</b><small>Todas tus categorÃ­as en una lista: pones el monto de cada una y listo</small></span>${icon('chevron')}</button>
-      <button class="add-opt" data-opt="single"><span class="add-emoji">ðŸŽ¯</span><span><b>Presupuesto suelto</b><small>Un solo monto para un centro o una categorÃ­a</small></span>${icon('chevron')}</button>
+      <button class="add-opt main" data-opt="plan"><span class="add-emoji">🗂️</span><span><b>Plan por centro de costo</b><small>Todas tus categorías en una lista: pones el monto de cada una y listo</small></span>${icon('chevron')}</button>
+      <button class="add-opt" data-opt="single"><span class="add-emoji">🎯</span><span><b>Presupuesto suelto</b><small>Un solo monto para un centro o una categoría</small></span>${icon('chevron')}</button>
     </div>`,
   });
   sheet.body.addEventListener('click', (e) => {
@@ -657,7 +657,7 @@ function openNewBudget() {
   });
 }
 
-// Promedio mensual de gasto por categorÃ­a en un centro de costo (3 meses completos anteriores).
+// Promedio mensual de gasto por categoría en un centro de costo (3 meses completos anteriores).
 function historyAverages(costCenterId) {
   const now = new Date();
   const from = toISO(new Date(now.getFullYear(), now.getMonth() - 3, 1));
@@ -679,7 +679,7 @@ function roundNice(v) {
   return Math.max(step, Math.round(v / step) * step);
 }
 
-// Editor de plan: un centro de costo, un perÃ­odo y un monto por categorÃ­a.
+// Editor de plan: un centro de costo, un período y un monto por categoría.
 function openPlanEditor({ groupId = null, costCenterId = null } = {}) {
   const existing = groupId ? state.budgets.filter((b) => b.groupId === groupId) : [];
   const totalB = existing.find((b) => !b.categoryId);
@@ -703,7 +703,7 @@ function openPlanEditor({ groupId = null, costCenterId = null } = {}) {
   let flash = new Set();
   let lastAmounts = null;
 
-  // Si ya hay un plan para ese centro, se edita ese. Si hay presupuestos sueltos del mismo centro y perÃ­odo, se incorporan.
+  // Si ya hay un plan para ese centro, se edita ese. Si hay presupuestos sueltos del mismo centro y período, se incorporan.
   const adoptLoose = () => {
     p.adopted = state.budgets.filter((b) => !b.groupId && b.costCenterId === p.costCenterId && b.period === p.period);
     for (const b of p.adopted) if (b.categoryId && !p.amounts[b.categoryId]) p.amounts[b.categoryId] = String(b.amount);
@@ -722,7 +722,7 @@ function openPlanEditor({ groupId = null, costCenterId = null } = {}) {
     const tot = p.cushion ? parseAmount(p.total) || 0 : sum;
     const err = p.cushion && tot < sum;
     return `<div class="plan-total-main"><span class="overline">Total del plan</span><b class="num">${money(tot, undefined, { hero: true })}</b></div>
-      ${p.cushion ? `<div class="plan-cushion"><span>Total con colchÃ³n</span><div class="amount-input sm"><span>${esc(currencyPrefix())}</span><input class="input num" data-total inputmode="decimal" value="${esc(p.total)}" placeholder="${Math.round(sum)}"></div></div>
+      ${p.cushion ? `<div class="plan-cushion"><span>Total con colchón</span><div class="amount-input sm"><span>${esc(currencyPrefix())}</span><input class="input num" data-total inputmode="decimal" value="${esc(p.total)}" placeholder="${Math.round(sum)}"></div></div>
         ${err ? `<p class="field-error">El total no puede ser menor que la suma (${money(sum)})</p>` : tot > sum ? `<p class="muted small">Sin asignar: <b>${money(tot - sum)}</b></p>` : ''}` : ''}`;
   };
   const updateTotals = () => {
@@ -739,7 +739,7 @@ function openPlanEditor({ groupId = null, costCenterId = null } = {}) {
     }
     const n = Object.values(p.amounts).filter((v) => parseAmount(v) > 0).length;
     const btn = sheet.body.querySelector('[data-plan="save"]');
-    if (btn) { btn.disabled = !n; btn.textContent = n ? `${isEdit ? 'Guardar plan' : 'Crear plan'} Â· ${n} ${n === 1 ? 'categorÃ­a' : 'categorÃ­as'}` : 'Pon al menos un monto'; }
+    if (btn) { btn.disabled = !n; btn.textContent = n ? `${isEdit ? 'Guardar plan' : 'Crear plan'} · ${n} ${n === 1 ? 'categoría' : 'categorías'}` : 'Pon al menos un monto'; }
   };
 
   const draw = () => {
@@ -749,24 +749,24 @@ function openPlanEditor({ groupId = null, costCenterId = null } = {}) {
     const cats = visibleCategories();
     sheet.setBody(`
       <div class="field"><span>Centro de costo</span><div class="chip-row scroll">${state.costCenters.map((c) => `<button type="button" class="chip ${c.id === p.costCenterId ? 'on' : ''}" data-cc="${c.id}">${esc(c.emoji || '')} ${esc(c.name)}</button>`).join('')}</div></div>
-      <div class="field"><span>PerÃ­odo</span><div class="seg wrap">${[['weekly', 'Semanal'], ['biweekly', 'Quincenal'], ['monthly', 'Mensual'], ['yearly', 'Anual'], ['none', 'Fechas']].map(([v, l]) => `<button type="button" class="${p.period === v ? 'on' : ''}" data-period="${v}">${l}</button>`).join('')}</div></div>
-      ${p.period === 'monthly' ? `<div class="field"><span>DÃ­a de reinicio</span><div class="stepper"><button type="button" data-step="-1" aria-label="Menos">âˆ’</button><b>${p.resetDay}</b><button type="button" data-step="1" aria-label="MÃ¡s">+</button><small>de cada mes</small></div></div>` : ''}
+      <div class="field"><span>Período</span><div class="seg wrap">${[['weekly', 'Semanal'], ['biweekly', 'Quincenal'], ['monthly', 'Mensual'], ['yearly', 'Anual'], ['none', 'Fechas']].map(([v, l]) => `<button type="button" class="${p.period === v ? 'on' : ''}" data-period="${v}">${l}</button>`).join('')}</div></div>
+      ${p.period === 'monthly' ? `<div class="field"><span>Día de reinicio</span><div class="stepper"><button type="button" data-step="-1" aria-label="Menos">−</button><b>${p.resetDay}</b><button type="button" data-step="1" aria-label="Más">+</button><small>de cada mes</small></div></div>` : ''}
       ${p.period === 'weekly' ? `<div class="field"><span>Reinicia el</span><div class="seg wrap">${WEEKDAYS.map((d, i) => `<button type="button" class="${(p.resetDay % 7) === i ? 'on' : ''}" data-weekday="${i}">${d.slice(0, 3)}</button>`).join('')}</div></div>` : ''}
       ${p.period === 'biweekly' || p.period === 'yearly' ? `<label class="field"><span>Empieza el</span><input class="input" type="date" data-date="startDate" value="${p.startDate}"></label>` : ''}
       ${p.period === 'none' ? `<div class="two"><label class="field"><span>Desde</span><input class="input" type="date" data-date="startDate" value="${p.startDate}"></label><label class="field"><span>Hasta</span><input class="input" type="date" data-date="endDate" value="${p.endDate}"></label></div>` : ''}
-      ${p.adopted.length && !isEdit ? `<p class="tip-card">ðŸ§© <span>IncluÃ­ tus ${p.adopted.length} presupuestos sueltos de ${esc(cc.name)}. Al guardar quedan dentro de este plan.</span></p>` : ''}
+      ${p.adopted.length && !isEdit ? `<p class="tip-card">🧩 <span>Incluí tus ${p.adopted.length} presupuestos sueltos de ${esc(cc.name)}. Al guardar quedan dentro de este plan.</span></p>` : ''}
       <div class="plan-total">${totalHTML()}</div>
       <div class="chip-row scroll plan-quick">
-        <button type="button" class="chip" data-plan="suggest" ${avgs && factor ? '' : 'disabled'} title="${avgs ? '' : 'AÃºn no hay historial suficiente'}">âœ¨ Sugerir segÃºn mi historial</button>
-        <button type="button" class="chip ${p.cushion ? 'on' : ''}" data-plan="cushion">ðŸ«™ ColchÃ³n sin asignar</button>
+        <button type="button" class="chip" data-plan="suggest" ${avgs && factor ? '' : 'disabled'} title="${avgs ? '' : 'Aún no hay historial suficiente'}">✨ Sugerir según mi historial</button>
+        <button type="button" class="chip ${p.cushion ? 'on' : ''}" data-plan="cushion">🫙 Colchón sin asignar</button>
         <button type="button" class="chip" data-plan="clear">Limpiar</button>
       </div>
-      ${!avgs ? '<p class="muted small">Sin historial de los Ãºltimos 3 meses en este centro: escribe los montos a mano.</p>' : ''}
+      ${!avgs ? '<p class="muted small">Sin historial de los últimos 3 meses en este centro: escribe los montos a mano.</p>' : ''}
       <div class="card list-card plan-list">${cats.map((c, i) => {
         const avg = avgs?.[c.id] && factor ? roundNice(avgs[c.id] * factor) : 0;
         return `<label class="plan-line ${flash.has(c.id) ? 'flash' : ''}"><span class="avatar sm" style="--cat:var(--c${c.color})">${c.emoji}</span>
           <span class="grow">${esc(c.name)}${avg ? `<button type="button" class="avg-btn" data-fill="${c.id}" data-v="${avg}">Prom.: ${money(avg)}</button>` : ''}</span>
-          <span class="amount-input sm"><span>${esc(currencyPrefix())}</span><input class="input num" data-cat-amt="${c.id}" data-i="${i}" inputmode="decimal" enterkeyhint="${i === cats.length - 1 ? 'done' : 'next'}" value="${esc(p.amounts[c.id] || '')}" placeholder="â€”"></span></label>`;
+          <span class="amount-input sm"><span>${esc(currencyPrefix())}</span><input class="input num" data-cat-amt="${c.id}" data-i="${i}" inputmode="decimal" enterkeyhint="${i === cats.length - 1 ? 'done' : 'next'}" value="${esc(p.amounts[c.id] || '')}" placeholder="—"></span></label>`;
       }).join('')}</div>
       <button class="btn primary full big plan-save" data-plan="save"></button>
       ${isEdit ? '<button class="btn danger-ghost full" data-plan="delete">Eliminar plan</button>' : ''}`);
@@ -794,7 +794,7 @@ function openPlanEditor({ groupId = null, costCenterId = null } = {}) {
     const cc = e.target.closest('[data-cc]');
     if (cc) {
       const other = otherPlan(cc.dataset.cc);
-      if (other && !isEdit) { sheet.close(); toast('Ese centro ya tiene un plan: Ã¡brelo para editarlo'); setTimeout(() => openPlanEditor({ groupId: other.groupId }), 150); return; }
+      if (other && !isEdit) { sheet.close(); toast('Ese centro ya tiene un plan: ábrelo para editarlo'); setTimeout(() => openPlanEditor({ groupId: other.groupId }), 150); return; }
       p.costCenterId = cc.dataset.cc;
       if (!isEdit) { p.amounts = {}; adoptLoose(); }
       draw(); return;
@@ -832,15 +832,15 @@ function openPlanEditor({ groupId = null, costCenterId = null } = {}) {
         p.amounts[c.id] = String(roundNice(avgs[c.id] * factor));
         flash.add(c.id); n++;
       }
-      // Con colchÃ³n, el total sube si la suma lo supera.
+      // Con colchón, el total sube si la suma lo supera.
       if (p.cushion && (parseAmount(p.total) || 0) < sumAmounts()) p.total = String(Math.round(sumAmounts()));
       draw();
-      toast(n ? `SugerÃ­ ${n} ${n === 1 ? 'monto' : 'montos'} segÃºn tus Ãºltimos 3 meses` : 'No habÃ­a categorÃ­as vacÃ­as con historial', n ? { undo: () => { p.amounts = lastAmounts; draw(); } } : {});
+      toast(n ? `Sugerí ${n} ${n === 1 ? 'monto' : 'montos'} según tus últimos 3 meses` : 'No había categorías vacías con historial', n ? { undo: () => { p.amounts = lastAmounts; draw(); } } : {});
     }
     if (act === 'cushion') { p.cushion = !p.cushion; if (p.cushion && !p.total) p.total = String(Math.round(sumAmounts())); draw(); }
     if (act === 'clear') { lastAmounts = { ...p.amounts }; p.amounts = {}; draw(); toast('Montos borrados', { undo: () => { p.amounts = lastAmounts; draw(); } }); }
     if (act === 'delete') {
-      if (!(await confirmDialog({ title: 'Eliminar plan', text: 'Se eliminarÃ¡ el plan y los presupuestos de todas sus categorÃ­as. Tus gastos no se borran.', confirmText: 'Eliminar', danger: true }))) return;
+      if (!(await confirmDialog({ title: 'Eliminar plan', text: 'Se eliminará el plan y los presupuestos de todas sus categorías. Tus gastos no se borran.', confirmText: 'Eliminar', danger: true }))) return;
       state.budgets = state.budgets.filter((b) => b.groupId !== p.groupId);
       save(); sheet.close(); toast('Plan eliminado');
     }
@@ -849,15 +849,15 @@ function openPlanEditor({ groupId = null, costCenterId = null } = {}) {
 
   const savePlan = async () => {
     const entries = Object.entries(p.amounts).map(([id, v]) => [id, parseAmount(v)]).filter(([, v]) => v > 0);
-    if (!entries.length) { toast('Pon el monto de al menos una categorÃ­a'); return; }
+    if (!entries.length) { toast('Pon el monto de al menos una categoría'); return; }
     if (p.period === 'none' && p.endDate < p.startDate) { toast('La fecha final debe ser posterior a la inicial'); return; }
     const sum = entries.reduce((a, [, v]) => a + v, 0);
     const total = p.cushion ? parseAmount(p.total) : sum;
-    if (total < sum - 0.005) { toast('El total no puede ser menor que la suma de las categorÃ­as'); return; }
+    if (total < sum - 0.005) { toast('El total no puede ser menor que la suma de las categorías'); return; }
     const removed = existing.filter((b) => b.categoryId && !entries.some(([id]) => id === b.categoryId));
     if (removed.length && !(await confirmDialog({
       title: 'Quitar presupuestos',
-      text: `Se quitarÃ¡ el presupuesto de ${removed.map((b) => `â€œ${esc(categoryById(b.categoryId).name)}â€`).join(', ')}. Tus gastos no cambian.`,
+      text: `Se quitará el presupuesto de ${removed.map((b) => `“${esc(categoryById(b.categoryId).name)}”`).join(', ')}. Tus gastos no cambian.`,
       confirmText: 'Quitar y guardar',
     }))) return;
     const cc = costCenterById(p.costCenterId);
@@ -872,7 +872,7 @@ function openPlanEditor({ groupId = null, costCenterId = null } = {}) {
     next.forEach((b) => animated.delete(b.id));
     save();
     sheet.close();
-    toast(isEdit ? 'Plan actualizado' : `Plan creado Â· ${entries.length} ${entries.length === 1 ? 'categorÃ­a' : 'categorÃ­as'}`);
+    toast(isEdit ? 'Plan actualizado' : `Plan creado · ${entries.length} ${entries.length === 1 ? 'categoría' : 'categorías'}`);
   };
 
   if (!isEdit) {
@@ -892,15 +892,15 @@ function openBudgetDetail(id) {
     title: b.name,
     full: true,
     headerAction: `<button class="icon-btn" data-edit-budget aria-label="Editar">${icon('pencil')}</button>`,
-    body: `<p class="muted center">${esc(periodText(b))} Â· ${dateRange(s.start, s.end)}</p>
+    body: `<p class="muted center">${esc(periodText(b))} · ${dateRange(s.start, s.end)}</p>
       ${paceCard(b, { large: true })}
-      <h2 class="section-title">Gastos del perÃ­odo <span class="count">${list.length}</span></h2>
+      <h2 class="section-title">Gastos del período <span class="count">${list.length}</span></h2>
       <div class="card list-card">${list.length ? list.map((e) => {
         const c = categoryById(e.categoryId);
         return `<div class="row"><div class="swipe-content static" data-action="edit-expense" data-id="${e.id}"><span class="avatar" style="--cat:var(--c${c.color})">${c.emoji}</span>
-          <span class="row-main"><span class="row-title">${esc(e.merchant)}</span><span class="row-sub">${dateShort(e.date)} Â· ${esc(c.name)}</span></span>
+          <span class="row-main"><span class="row-title">${esc(e.merchant)}</span><span class="row-sub">${dateShort(e.date)} · ${esc(c.name)}</span></span>
           <span class="row-amt"><span class="num">${money(e.amountBase)}</span></span></div></div>`;
-      }).join('') : '<p class="widget-empty">Sin gastos en este perÃ­odo</p>'}</div>`,
+      }).join('') : '<p class="widget-empty">Sin gastos en este período</p>'}</div>`,
     onMount: (sheet) => {
       const card = sheet.el.querySelector('.pace-card');
       prepareDraw(card);
@@ -922,13 +922,13 @@ function openBudgetEditor(existing) {
       <label class="field"><span>Nombre</span><input class="input" name="name" value="${esc(b.name)}" placeholder="Ej. Supermercado del mes" required></label>
       <label class="field"><span>Monto</span><div class="amount-input"><span>${esc(currencyPrefix())}</span><input class="input" name="amount" inputmode="decimal" value="${esc(String(b.amount))}" placeholder="0" required></div></label>
       <div class="field"><span>Centro de costo</span><button type="button" class="select-btn" data-pick="cc">${esc(costCenterById(b.costCenterId).emoji || '')} ${esc(costCenterById(b.costCenterId).name)} ${icon('chevron')}</button></div>
-      <div class="field"><span>CategorÃ­a <small>(opcional)</small></span><button type="button" class="select-btn" data-pick="cat">${b.categoryId ? `${categoryById(b.categoryId).emoji} ${esc(categoryById(b.categoryId).name)}` : 'Todas las categorÃ­as'} ${icon('chevron')}</button></div>
-      <div class="field"><span>PerÃ­odo</span><div class="seg wrap">${[['weekly', 'Semanal'], ['biweekly', 'Quincenal'], ['monthly', 'Mensual'], ['yearly', 'Anual'], ['none', 'Fechas']].map(([v, l]) => `<button type="button" class="${b.period === v ? 'on' : ''}" data-period="${v}">${l}</button>`).join('')}</div></div>
-      ${b.period === 'monthly' ? `<div class="field"><span>DÃ­a de reinicio</span><div class="stepper"><button type="button" data-step="-1" aria-label="Menos">âˆ’</button><b>${b.resetDay}</b><button type="button" data-step="1" aria-label="MÃ¡s">+</button><small>de cada mes</small></div></div>` : ''}
+      <div class="field"><span>Categoría <small>(opcional)</small></span><button type="button" class="select-btn" data-pick="cat">${b.categoryId ? `${categoryById(b.categoryId).emoji} ${esc(categoryById(b.categoryId).name)}` : 'Todas las categorías'} ${icon('chevron')}</button></div>
+      <div class="field"><span>Período</span><div class="seg wrap">${[['weekly', 'Semanal'], ['biweekly', 'Quincenal'], ['monthly', 'Mensual'], ['yearly', 'Anual'], ['none', 'Fechas']].map(([v, l]) => `<button type="button" class="${b.period === v ? 'on' : ''}" data-period="${v}">${l}</button>`).join('')}</div></div>
+      ${b.period === 'monthly' ? `<div class="field"><span>Día de reinicio</span><div class="stepper"><button type="button" data-step="-1" aria-label="Menos">−</button><b>${b.resetDay}</b><button type="button" data-step="1" aria-label="Más">+</button><small>de cada mes</small></div></div>` : ''}
       ${b.period === 'weekly' ? `<div class="field"><span>Reinicia el</span><div class="seg wrap">${WEEKDAYS.map((d, i) => `<button type="button" class="${(b.resetDay % 7) === i ? 'on' : ''}" data-weekday="${i}">${d.slice(0, 3)}</button>`).join('')}</div></div>` : ''}
       ${b.period === 'biweekly' || b.period === 'yearly' ? `<label class="field"><span>Empieza el</span><input class="input" type="date" name="startDate" value="${b.startDate || todayISO()}"></label>` : ''}
       ${b.period === 'none' ? `<div class="two"><label class="field"><span>Desde</span><input class="input" type="date" name="startDate" value="${b.startDate}"></label><label class="field"><span>Hasta</span><input class="input" type="date" name="endDate" value="${b.endDate}"></label></div>` : ''}
-      ${prevStats ? `<div class="preview"><span class="overline">Vista previa Â· ${dateRange(prevStats.start, prevStats.end)}</span>${paceSVG(prevStats, { ghost: true })}</div>` : ''}
+      ${prevStats ? `<div class="preview"><span class="overline">Vista previa · ${dateRange(prevStats.start, prevStats.end)}</span>${paceSVG(prevStats, { ghost: true })}</div>` : ''}
       <button class="btn primary full big" type="submit">${existing ? 'Guardar cambios' : 'Crear presupuesto'}</button>
       ${existing ? '<button class="btn danger-ghost full" type="button" data-delete>Eliminar presupuesto</button>' : ''}
     </form>`);
@@ -948,14 +948,14 @@ function openBudgetEditor(existing) {
       if (v) { b.costCenterId = v; draw(); }
     });
     form.querySelector('[data-pick="cat"]').addEventListener('click', async () => {
-      const v = await pick({ title: 'CategorÃ­a', options: [{ value: '__all', label: 'Todas las categorÃ­as', emoji: 'ðŸŽ¯' }, ...visibleCategories().map((c) => ({ value: c.id, label: c.name, emoji: c.emoji, color: c.color }))], selected: b.categoryId || '__all' });
+      const v = await pick({ title: 'Categoría', options: [{ value: '__all', label: 'Todas las categorías', emoji: '🎯' }, ...visibleCategories().map((c) => ({ value: c.id, label: c.name, emoji: c.emoji, color: c.color }))], selected: b.categoryId || '__all' });
       if (v === undefined) return;
       b.categoryId = v === '__all' ? null : v;
       if (!b.name && b.categoryId) b.name = categoryById(b.categoryId).name;
       draw();
     });
     form.querySelector('[data-delete]')?.addEventListener('click', async () => {
-      if (!(await confirmDialog({ title: 'Eliminar presupuesto', text: `Se eliminarÃ¡ â€œ${esc(b.name)}â€. Tus gastos no se borran.`, confirmText: 'Eliminar', danger: true }))) return;
+      if (!(await confirmDialog({ title: 'Eliminar presupuesto', text: `Se eliminará “${esc(b.name)}”. Tus gastos no se borran.`, confirmText: 'Eliminar', danger: true }))) return;
       state.budgets = state.budgets.filter((x) => x.id !== b.id);
       save();
       sheet.close();
@@ -982,11 +982,11 @@ function openBudgetEditor(existing) {
 
 function openAddMenu() {
   const sheet = openSheet({
-    title: 'Â¿CÃ³mo quieres agregar?',
+    title: '¿Cómo quieres agregar?',
     body: `<div class="add-options">
-      <button class="add-opt main" data-opt="batch"><span class="add-emoji">ðŸ“¥</span><span><b>Ponerme al dÃ­a</b><small>Sube capturas del banco, CSV, Excel o PDF</small></span>${icon('chevron')}</button>
-      <button class="add-opt" data-opt="receipt"><span class="add-emoji">ðŸ§¾</span><span><b>Escanear recibo</b><small>Una foto del ticket y listo</small></span>${icon('chevron')}</button>
-      <button class="add-opt" data-opt="manual"><span class="add-emoji">âœï¸</span><span><b>Agregar a mano</b><small>Monto, categorÃ­a y guardar</small></span>${icon('chevron')}</button>
+      <button class="add-opt main" data-opt="batch"><span class="add-emoji">📥</span><span><b>Ponerme al día</b><small>Sube capturas del banco, CSV, Excel o PDF</small></span>${icon('chevron')}</button>
+      <button class="add-opt" data-opt="receipt"><span class="add-emoji">🧾</span><span><b>Escanear recibo</b><small>Una foto del ticket y listo</small></span>${icon('chevron')}</button>
+      <button class="add-opt" data-opt="manual"><span class="add-emoji">✍️</span><span><b>Agregar a mano</b><small>Monto, categoría y guardar</small></span>${icon('chevron')}</button>
     </div>`,
   });
   sheet.body.addEventListener('click', (e) => {
@@ -1001,7 +1001,7 @@ function decimalSep() {
   return (0.5).toLocaleString(CURRENCIES.find((c) => c.code === state.settings.currency)?.locale || 'es-MX').charAt(1);
 }
 
-// Formulario de gasto: nuevo, ediciÃ³n o prellenado por la IA.
+// Formulario de gasto: nuevo, edición o prellenado por la IA.
 function openExpenseForm({ expense = null, prefill = null, uncertain = {} } = {}) {
   const base = expense || prefill || {};
   const f = {
@@ -1036,11 +1036,11 @@ function openExpenseForm({ expense = null, prefill = null, uncertain = {} } = {}
         <span class="amount-big"><span class="hero-sym">${esc(currencyPrefix(f.currency).trim())}</span>${amountDisplay()}</span>
         ${unsure.amount ? '<span class="unsure-q">?</span>' : ''}
       </div>
-      ${foreign ? `<div class="rate-line">â‰ˆ <b>${money(parseAmount(f.amount) * f.rate)}</b> Â· tasa <input class="rate-input" inputmode="decimal" value="${f.rate}" aria-label="Tasa de cambio"></div>` : ''}
-      <input class="input desc ${unsure.merchant ? 'unsure' : ''}" placeholder="Â¿En quÃ© fue? (ej. Walmart)" value="${esc(f.merchant)}" data-f="merchant">
+      ${foreign ? `<div class="rate-line">≈ <b>${money(parseAmount(f.amount) * f.rate)}</b> · tasa <input class="rate-input" inputmode="decimal" value="${f.rate}" aria-label="Tasa de cambio"></div>` : ''}
+      <input class="input desc ${unsure.merchant ? 'unsure' : ''}" placeholder="¿En qué fue? (ej. Walmart)" value="${esc(f.merchant)}" data-f="merchant">
       <div class="chip-row scroll cats ${unsure.categoryId ? 'unsure' : ''}">
         ${cats.map((c) => `<button class="chip cat ${f.categoryId === c.id ? 'on' : ''}" data-cat="${c.id}">${c.emoji} ${esc(c.name)}</button>`).join('')}
-        <button class="chip cat" data-act="more-cats">MÃ¡sâ€¦</button>
+        <button class="chip cat" data-act="more-cats">Más…</button>
       </div>
       <div class="meta-row">
         <label class="meta ${unsure.date ? 'unsure' : ''}"><span>Fecha</span><input type="date" value="${f.date}" data-f="date"></label>
@@ -1074,7 +1074,7 @@ function openExpenseForm({ expense = null, prefill = null, uncertain = {} } = {}
   const submit = (more) => {
     const amount = parseAmount(f.amount);
     if (amount <= 0) { toast('Escribe el monto'); return; }
-    if (!f.categoryId) { toast('Elige una categorÃ­a'); return; }
+    if (!f.categoryId) { toast('Elige una categoría'); return; }
     const data = {
       amount, currency: f.currency, rate: f.currency === state.settings.currency ? 1 : parseAmount(f.rate) || 1,
       merchant: f.merchant.trim() || categoryById(f.categoryId).name, description: base.description || f.merchant.trim(),
@@ -1086,7 +1086,7 @@ function openExpenseForm({ expense = null, prefill = null, uncertain = {} } = {}
       toast(isPending ? 'Gasto confirmado' : 'Cambios guardados');
     } else {
       addExpense({ ...data, source: prefill?.source || 'manual' });
-      toast(`Guardado Â· ${money(amount, f.currency)}`);
+      toast(`Guardado · ${money(amount, f.currency)}`);
     }
     vibrate(10);
     if (more) {
@@ -1108,11 +1108,11 @@ function openExpenseForm({ expense = null, prefill = null, uncertain = {} } = {}
     const act = e.target.closest('[data-act]')?.dataset.act;
     if (!act) return;
     if (act === 'currency') {
-      const v = await pick({ title: 'Moneda', options: CURRENCIES.map((c) => ({ value: c.code, label: `${c.code} Â· ${c.name}` })), selected: f.currency });
+      const v = await pick({ title: 'Moneda', options: CURRENCIES.map((c) => ({ value: c.code, label: `${c.code} · ${c.name}` })), selected: f.currency });
       if (v) { f.currency = v; f.rate = rateFor(v); draw(); }
     }
     if (act === 'more-cats') {
-      const v = await pick({ title: 'CategorÃ­a', options: visibleCategories().map((c) => ({ value: c.id, label: c.name, emoji: c.emoji, color: c.color })), selected: f.categoryId });
+      const v = await pick({ title: 'Categoría', options: visibleCategories().map((c) => ({ value: c.id, label: c.name, emoji: c.emoji, color: c.color })), selected: f.categoryId });
       if (v) { f.categoryId = v; delete unsure.categoryId; draw(); }
     }
     if (act === 'cc') {
@@ -1136,7 +1136,7 @@ function openExpenseForm({ expense = null, prefill = null, uncertain = {} } = {}
       if (b) b.textContent = money(parseAmount(f.amount) * f.rate);
     }
   });
-  // Teclado fÃ­sico en escritorio.
+  // Teclado físico en escritorio.
   sheet.el.addEventListener('keydown', (e) => {
     if (e.target.matches('input')) return;
     if (/^[0-9]$/.test(e.key)) press(e.key);
@@ -1153,26 +1153,26 @@ function openExpenseForm({ expense = null, prefill = null, uncertain = {} } = {}
 function aiBand() {
   const p = currentProvider();
   if (!hasApiKey()) return `<p class="demo-band">Modo demo: resultados de ejemplo. Agrega tu clave de ${esc(p.name)} en <button class="link-btn inline" data-action="settings">Ajustes</button> para lectura real.</p>`;
-  return `<p class="ai-band">${icon('key')} Lee con <b>${esc(modelLabel(p.id, currentModel()))}</b> Â· ${esc(p.company)}</p>`;
+  return `<p class="ai-band">${icon('key')} Lee con <b>${esc(modelLabel(p.id, currentModel()))}</b> · ${esc(p.company)}</p>`;
 }
 
 const readFiles = (files, mode, step, opts) => (hasApiKey() ? extractWithAI : extractDemo)(files, mode, step, opts);
 
-// Recibo: una foto â†’ (recortar/tapar) â†’ formulario prellenado.
+// Recibo: una foto → (recortar/tapar) → formulario prellenado.
 function openReceipt() {
   let entry = null;
   const sheet = openSheet({ title: 'Escanear recibo', body: '' });
   const drawPick = () => sheet.setBody(`${aiBand()}
       <div class="dropzone" id="rz">
-        <div class="dz-inner"><span class="dz-emoji">ðŸ§¾</span><b>Toma una foto del ticket</b><small>o elige una imagen o PDF</small>
-          <div class="btn-row"><label class="btn primary">${icon('camera')} CÃ¡mara<input type="file" accept="image/*" capture="environment" hidden></label>
+        <div class="dz-inner"><span class="dz-emoji">🧾</span><b>Toma una foto del ticket</b><small>o elige una imagen o PDF</small>
+          <div class="btn-row"><label class="btn primary">${icon('camera')} Cámara<input type="file" accept="image/*" capture="environment" hidden></label>
           <label class="btn ghost">${icon('upload')} Archivo<input type="file" accept="image/*,application/pdf" hidden></label></div></div>
       </div>`);
   const drawPreview = () => sheet.setBody(`${aiBand()}
-      <div class="receipt-preview">${entry.url ? `<img src="${entry.url}" alt="Recibo">` : '<span class="dz-emoji">ðŸ“„</span>'}${entry.edits ? '<span class="edited-badge">Editada</span>' : ''}</div>
-      <p class="hint center">${entry.url ? 'Â¿Hay datos que no quieres enviar? Recorta o tapa antes de leer.' : 'Los PDF no se pueden editar aquÃ­. Toma una captura si quieres tapar datos.'}</p>
+      <div class="receipt-preview">${entry.url ? `<img src="${entry.url}" alt="Recibo">` : '<span class="dz-emoji">📄</span>'}${entry.edits ? '<span class="edited-badge">Editada</span>' : ''}</div>
+      <p class="hint center">${entry.url ? '¿Hay datos que no quieres enviar? Recorta o tapa antes de leer.' : 'Los PDF no se pueden editar aquí. Toma una captura si quieres tapar datos.'}</p>
       <div class="btn-row two-btn">${entry.url ? `<button class="btn ghost" data-r="edit">${icon('pencil')} Editar</button>` : '<button class="btn ghost" data-r="other">Elegir otro</button>'}
-        <button class="btn primary" data-r="read">${entry.edits ? 'Leer recibo' : 'Usar asÃ­'}</button></div>`);
+        <button class="btn primary" data-r="read">${entry.edits ? 'Leer recibo' : 'Usar así'}</button></div>`);
   sheet.body.addEventListener('change', (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1192,11 +1192,11 @@ function openReceipt() {
     const zone = sheet.body.querySelector('.receipt-preview');
     sheet.body.querySelector('.btn-row').remove();
     sheet.body.querySelector('.hint')?.remove();
-    zone.insertAdjacentHTML('afterend', '<p class="shimmer center">Leyendo tu reciboâ€¦</p>');
+    zone.insertAdjacentHTML('afterend', '<p class="shimmer center">Leyendo tu recibo…</p>');
     try {
       const result = await readFiles([entry.file], 'receipt');
       const mov = (result.movimientos || [])[0];
-      if (!mov) throw new AiError(result.nota || 'No encontrÃ© un total en la imagen.');
+      if (!mov) throw new AiError(result.nota || 'No encontré un total en la imagen.');
       sheet.close();
       const low = mov.confianza === 'baja';
       openExpenseForm({
@@ -1210,33 +1210,33 @@ function openReceipt() {
     } catch (err) {
       console.error(err);
       sheet.body.querySelector('.shimmer')?.remove();
-      zone.insertAdjacentHTML('afterend', `<p class="error-box">ðŸ˜• ${esc(err instanceof AiError ? err.message : 'OcurriÃ³ un error inesperado.')}</p>
+      zone.insertAdjacentHTML('afterend', `<p class="error-box">😕 ${esc(err instanceof AiError ? err.message : 'Ocurrió un error inesperado.')}</p>
         <div class="btn-row two-btn"><button class="btn ghost" data-r="other">Elegir otro</button><button class="btn primary" data-r="read">Intentar de nuevo</button></div>`);
     }
   };
   drawPick();
 }
 
-// Ponerme al dÃ­a: varios archivos â†’ (recortar/tapar) â†’ bandeja de revisiÃ³n.
+// Ponerme al día: varios archivos → (recortar/tapar) → bandeja de revisión.
 function openBatch() {
   const files = []; // { original, file, edits, url }
   let account = '';
-  const sheet = openSheet({ title: 'Ponerme al dÃ­a', full: true, body: '' });
+  const sheet = openSheet({ title: 'Ponerme al día', full: true, body: '' });
   const isImg = (f) => f.original.type.startsWith('image/');
   const kind = (f) => (isImg(f) ? 'IMG' : f.original.name.toLowerCase().endsWith('.pdf') ? 'PDF' : /\.xlsx?$/i.test(f.original.name) ? 'XLS' : 'CSV');
   const draw = () => {
     const anyImg = files.some(isImg);
     sheet.setBody(`${aiBand()}
-      <p class="lead">Sube capturas de tus movimientos o el archivo que exporta tu banco. La IA separa cada movimiento y tÃº solo confirmas.</p>
+      <p class="lead">Sube capturas de tus movimientos o el archivo que exporta tu banco. La IA separa cada movimiento y tú solo confirmas.</p>
       <label class="dropzone ${files.length ? '' : 'big'}" id="bz">
         <input type="file" multiple accept="image/*,.pdf,.csv,.txt,.xls,.xlsx" hidden>
-        <div class="dz-inner"><span class="dz-emoji">ðŸ“¥</span><b>${files.length ? 'Agregar mÃ¡s archivos' : 'Toca para elegir archivos'}</b><small>Capturas, CSV, Excel o PDF Â· varios a la vez</small></div>
+        <div class="dz-inner"><span class="dz-emoji">📥</span><b>${files.length ? 'Agregar más archivos' : 'Toca para elegir archivos'}</b><small>Capturas, CSV, Excel o PDF · varios a la vez</small></div>
       </label>
-      ${anyImg && !state.settings.cropTipSeen ? `<div class="tip-card">ðŸ”’ <span><b>Â¿Hay datos sensibles?</b> Toca <b>Editar</b> para recortar o tapar antes de enviar. La imagen original no sale de tu telÃ©fono.</span><button class="icon-btn sm" data-act="tip-x" aria-label="Cerrar aviso">${icon('x')}</button></div>` : ''}
-      ${files.length ? `<div class="thumbs">${files.map((f, i) => `<div class="thumb ${f.edits ? 'edited' : ''}">${isImg(f) ? `<img src="${f.url}" alt="">` : `<span class="dz-emoji">${kind(f) === 'PDF' ? 'ðŸ“„' : 'ðŸ“Š'}</span>`}
-        <span class="tag">${f.edits ? 'âœ“ Editada' : kind(f)}</span><button class="thumb-x" data-rm="${i}" aria-label="Quitar">${icon('x')}</button>
+      ${anyImg && !state.settings.cropTipSeen ? `<div class="tip-card">🔒 <span><b>¿Hay datos sensibles?</b> Toca <b>Editar</b> para recortar o tapar antes de enviar. La imagen original no sale de tu teléfono.</span><button class="icon-btn sm" data-act="tip-x" aria-label="Cerrar aviso">${icon('x')}</button></div>` : ''}
+      ${files.length ? `<div class="thumbs">${files.map((f, i) => `<div class="thumb ${f.edits ? 'edited' : ''}">${isImg(f) ? `<img src="${f.url}" alt="">` : `<span class="dz-emoji">${kind(f) === 'PDF' ? '📄' : '📊'}</span>`}
+        <span class="tag">${f.edits ? '✓ Editada' : kind(f)}</span><button class="thumb-x" data-rm="${i}" aria-label="Quitar">${icon('x')}</button>
         ${isImg(f) ? `<button class="thumb-edit" data-edit-img="${i}">${icon('pencil')} Editar</button>` : ''}</div>`).join('')}</div>` : ''}
-      <div class="field"><span>Â¿De quÃ© medio de pago son? <small>(opcional)</small></span><button type="button" class="select-btn" data-act="account">${esc(account || 'La IA lo deduce')} ${icon('chevron')}</button></div>
+      <div class="field"><span>¿De qué medio de pago son? <small>(opcional)</small></span><button type="button" class="select-btn" data-act="account">${esc(account || 'La IA lo deduce')} ${icon('chevron')}</button></div>
       <div id="bprogress"></div>
       <button class="btn primary full big" data-act="read" ${files.length ? '' : 'disabled'}>${files.length ? `Leer ${files.length} ${files.length === 1 ? 'archivo' : 'archivos'}` : 'Elige al menos un archivo'}</button>`);
     sheet.body.querySelector('input[type=file]').addEventListener('change', (e) => {
@@ -1245,7 +1245,7 @@ function openBatch() {
     });
   };
 
-  // Edita la imagen i y, con "Siguiente", continÃºa con las demÃ¡s imÃ¡genes.
+  // Edita la imagen i y, con "Siguiente", continúa con las demás imágenes.
   const editFrom = async (start) => {
     const imgs = files.filter(isImg);
     for (let k = imgs.indexOf(files[start]); k >= 0 && k < imgs.length; k++) {
@@ -1265,7 +1265,7 @@ function openBatch() {
     const act = e.target.closest('[data-act]')?.dataset.act;
     if (act === 'tip-x') { state.settings.cropTipSeen = true; save(); draw(); }
     if (act === 'account') {
-      const v = await pickMethod({ title: 'Â¿De quÃ© medio de pago son?', selected: account });
+      const v = await pickMethod({ title: '¿De qué medio de pago son?', selected: account });
       if (v !== undefined) { account = v; draw(); }
     }
     if (act === 'read') runBatch();
@@ -1274,14 +1274,14 @@ function openBatch() {
   const runBatch = async () => {
     const btn = sheet.body.querySelector('[data-act="read"]');
     btn.disabled = true;
-    btn.textContent = 'Leyendoâ€¦';
+    btn.textContent = 'Leyendo…';
     const prog = sheet.body.querySelector('#bprogress');
     const steps = [];
     const step = (t) => { steps.push(t); prog.innerHTML = `<ul class="steps">${steps.map((s, i) => `<li class="${i === steps.length - 1 ? 'live' : 'done'}">${esc(s)}</li>`).join('')}</ul><div class="skeletons">${'<div class="skel"></div>'.repeat(4)}</div>`; };
     try {
       const result = await readFiles(files.map((f) => f.file), 'batch', step, { account });
       const movs = result.movimientos || [];
-      step(`EncontrÃ© ${movs.length} ${movs.length === 1 ? 'movimiento' : 'movimientos'}`);
+      step(`Encontré ${movs.length} ${movs.length === 1 ? 'movimiento' : 'movimientos'}`);
       const created = [];
       for (const m of movs) {
         const candidate = { amount: m.monto, date: m.fecha, currency: m.moneda };
@@ -1306,7 +1306,7 @@ function openBatch() {
       if (result.nota) toast(result.nota);
     } catch (err) {
       console.error(err);
-      prog.innerHTML = `<p class="error-box">ðŸ˜• ${esc(err instanceof AiError ? err.message : 'OcurriÃ³ un error inesperado al leer los archivos.')}</p>`;
+      prog.innerHTML = `<p class="error-box">😕 ${esc(err instanceof AiError ? err.message : 'Ocurrió un error inesperado al leer los archivos.')}</p>`;
       btn.disabled = false;
       btn.textContent = 'Intentar de nuevo';
     }
@@ -1327,21 +1327,21 @@ function addExpenseSilently(data) {
 const methodType = (id) => METHOD_TYPES.find((t) => t.id === id) || METHOD_TYPES[2];
 
 function methodSub(m) {
-  return [methodType(m.type).short, m.last4 ? `â€¢â€¢${m.last4}` : '', m.owner].filter(Boolean).join(' Â· ');
+  return [methodType(m.type).short, m.last4 ? `••${m.last4}` : '', m.owner].filter(Boolean).join(' · ');
 }
 
 function methodOption(m) {
   return { value: m.name, label: m.name, emoji: methodType(m.type).emoji, color: 6, hint: methodSub(m) };
 }
 
-// Selector de medio de pago con opciÃ³n de crear uno nuevo al vuelo. Devuelve el nombre o '' (sin especificar).
+// Selector de medio de pago con opción de crear uno nuevo al vuelo. Devuelve el nombre o '' (sin especificar).
 async function pickMethod({ title, selected }) {
   const v = await pick({
     title,
     options: [
       { value: '', label: 'Sin especificar' },
       ...paymentMethods().map(methodOption),
-      { value: '__new', label: 'Nuevo medio de pago', emoji: 'ï¼‹', color: 6 },
+      { value: '__new', label: 'Nuevo medio de pago', emoji: '＋', color: 6 },
     ],
     selected,
   });
@@ -1356,12 +1356,12 @@ function openPaymentMethods(onDone) {
   const draw = () => {
     const active = paymentMethods();
     const archived = paymentMethods({ archived: true });
-    sheet.setBody(`<p class="lead">Tus tarjetas, cuentas y billeteras. La IA los usa para saber con quÃ© pagaste cada movimiento.</p>
+    sheet.setBody(`<p class="lead">Tus tarjetas, cuentas y billeteras. La IA los usa para saber con qué pagaste cada movimiento.</p>
       <div class="card list-card">${active.length ? active.map((m, i) => `<div class="set-row method-row">
           <span class="order-btns"><button class="icon-btn sm" data-move="${m.id}" data-d="-1" ${i === 0 ? 'disabled' : ''} aria-label="Subir">${icon('up')}</button><button class="icon-btn sm" data-move="${m.id}" data-d="1" ${i === active.length - 1 ? 'disabled' : ''} aria-label="Bajar">${icon('down')}</button></span>
           <button class="method-main" data-edit="${m.id}"><span class="avatar sm" style="--cat:var(--c6)">${methodType(m.type).emoji}</span>
           <span class="grow">${esc(m.name)}<small>${esc(methodSub(m))}</small></span>${icon('chevron')}</button></div>`).join('')
-        : '<p class="widget-empty">AÃºn no tienes medios de pago</p>'}</div>
+        : '<p class="widget-empty">Aún no tienes medios de pago</p>'}</div>
       <button class="btn primary full" data-act="new">${icon('plus')} Agregar medio de pago</button>
       ${archived.length ? `<button class="link-btn" data-act="toggle-arch">${showArchived ? 'Ocultar' : 'Ver'} archivados (${archived.length})</button>
         ${showArchived ? `<div class="card list-card">${archived.map((m) => `<div class="set-row"><span class="avatar sm muted-av">${methodType(m.type).emoji}</span><span class="grow">${esc(m.name)}<small>${esc(methodSub(m))}</small></span>
@@ -1382,7 +1382,7 @@ function openPaymentMethods(onDone) {
     const ed = e.target.closest('[data-edit]');
     if (ed) { await openMethodEditor(state.paymentMethods.find((m) => m.id === ed.dataset.edit)); draw(); return; }
     const rs = e.target.closest('[data-restore]');
-    if (rs) { const m = state.paymentMethods.find((x) => x.id === rs.dataset.restore); if (m) { delete m.archived; save(); toast(`â€œ${m.name}â€ restaurado`); draw(); } return; }
+    if (rs) { const m = state.paymentMethods.find((x) => x.id === rs.dataset.restore); if (m) { delete m.archived; save(); toast(`“${m.name}” restaurado`); draw(); } return; }
     const act = e.target.closest('[data-act]')?.dataset.act;
     if (act === 'new') { await openMethodEditor(); draw(); }
     if (act === 'toggle-arch') { showArchived = !showArchived; draw(); }
@@ -1402,8 +1402,8 @@ function openMethodEditor(existing, prefill = {}) {
       sheet.setBody(`<form class="form" id="mform" autocomplete="off">
         <label class="field"><span>Nombre</span><input class="input" name="name" value="${esc(m.name)}" maxlength="28" placeholder="Ej. TDC BBVA" required><small class="field-error" hidden></small></label>
         <div class="field"><span>Tipo</span><div class="chip-row wrap">${METHOD_TYPES.map((t) => `<button type="button" class="chip ${m.type === t.id ? 'on' : ''}" data-type="${t.id}">${t.emoji} ${t.name}</button>`).join('')}</div></div>
-        ${digits ? `<label class="field"><span>Ãšltimos 4 dÃ­gitos <small>(opcional)</small></span><input class="input num" name="last4" value="${esc(m.last4)}" inputmode="numeric" maxlength="4" placeholder="1234"><small class="hint">Ayuda a la IA a reconocer tus estados de cuenta. Nunca escribas el nÃºmero completo.</small></label>` : ''}
-        <label class="field"><span>Titular <small>(opcional)</small></span><input class="input" name="owner" value="${esc(m.owner)}" maxlength="24" placeholder="Ej. Betzabeth"><small class="hint">Ãštil si tu pareja tiene una tarjeta del mismo banco.</small></label>
+        ${digits ? `<label class="field"><span>Últimos 4 dígitos <small>(opcional)</small></span><input class="input num" name="last4" value="${esc(m.last4)}" inputmode="numeric" maxlength="4" placeholder="1234"><small class="hint">Ayuda a la IA a reconocer tus estados de cuenta. Nunca escribas el número completo.</small></label>` : ''}
+        <label class="field"><span>Titular <small>(opcional)</small></span><input class="input" name="owner" value="${esc(m.owner)}" maxlength="24" placeholder="Ej. Betzabeth"><small class="hint">Útil si tu pareja tiene una tarjeta del mismo banco.</small></label>
         <button class="btn primary full big" type="submit">Guardar</button>
         ${existing ? `<button class="btn danger-ghost full" type="button" data-archive>${used ? 'Archivar' : 'Eliminar'}</button>
           ${used ? `<p class="hint center">Tiene ${used} ${used === 1 ? 'gasto' : 'gastos'}: al archivarlo deja de aparecer en las listas, pero esos gastos lo conservan.</p>` : ''}` : ''}
@@ -1420,9 +1420,9 @@ function openMethodEditor(existing, prefill = {}) {
       if (e.target.closest('[data-archive]')) {
         if (used) {
           state.paymentMethods.find((x) => x.id === m.id).archived = true;
-          toast(`â€œ${existing.name}â€ archivado`);
+          toast(`“${existing.name}” archivado`);
         } else {
-          if (!(await confirmDialog({ title: 'Eliminar medio de pago', text: `Se eliminarÃ¡ â€œ${esc(existing.name)}â€.`, confirmText: 'Eliminar', danger: true }))) return;
+          if (!(await confirmDialog({ title: 'Eliminar medio de pago', text: `Se eliminará “${esc(existing.name)}”.`, confirmText: 'Eliminar', danger: true }))) return;
           state.paymentMethods = state.paymentMethods.filter((x) => x.id !== m.id);
         }
         save();
@@ -1445,7 +1445,7 @@ function openMethodEditor(existing, prefill = {}) {
       } else state.paymentMethods.push(clean);
       save();
       saved = clean;
-      toast(existing ? 'Medio de pago actualizado' : `â€œ${name}â€ agregado`);
+      toast(existing ? 'Medio de pago actualizado' : `“${name}” agregado`);
       sheet.close();
     });
     draw();
@@ -1457,11 +1457,11 @@ function openMethodEditor(existing, prefill = {}) {
 function openSettings() {
   const sheet = openSheet({ title: 'Ajustes', full: true, body: '' });
   let showKey = false;
-  const conn = {}; // resultado de "Probar conexiÃ³n" por proveedor
+  const conn = {}; // resultado de "Probar conexión" por proveedor
   const pill = (id) => {
     if (!hasApiKey(id)) return '<span class="status-pill warn">Modo demo</span>';
-    if (conn[id] === 'testing') return '<span class="status-pill">Probandoâ€¦</span>';
-    if (conn[id] === true) return '<span class="status-pill ok">Conectada âœ“</span>';
+    if (conn[id] === 'testing') return '<span class="status-pill">Probando…</span>';
+    if (conn[id] === true) return '<span class="status-pill ok">Conectada ✓</span>';
     if (typeof conn[id] === 'string') return `<span class="status-pill over">${esc(conn[id])}</span>`;
     return '<span class="status-pill">Sin probar</span>';
   };
@@ -1479,24 +1479,24 @@ function openSettings() {
       <div class="card list-card">
         <div class="set-row column">
           <span class="overline">Proveedor</span>
-          <div class="provider-seg">${PROVIDERS.map((x) => `<button class="${x.id === p.id ? 'on' : ''}" data-provider="${x.id}"><b>${esc(x.name)}${hasApiKey(x.id) ? '<i class="pdot"></i>' : ''}</b><small>${esc(x.company)} Â· ${x.id === 'google' ? 'plan gratis' : 'de pago'}</small></button>`).join('')}</div>
+          <div class="provider-seg">${PROVIDERS.map((x) => `<button class="${x.id === p.id ? 'on' : ''}" data-provider="${x.id}"><b>${esc(x.name)}${hasApiKey(x.id) ? '<i class="pdot"></i>' : ''}</b><small>${esc(x.company)} · ${x.id === 'google' ? 'plan gratis' : 'de pago'}</small></button>`).join('')}</div>
         </div>
         <div class="set-row column">
           <div class="set-line"><span>${icon('key')} Clave de ${esc(p.company)}</span>${pill(p.id)}</div>
           <div class="key-input"><input class="input" data-key-input type="${showKey ? 'text' : 'password'}" value="${esc(s.keys[p.id] || '')}" placeholder="${esc(p.keyHint)}" autocomplete="off" spellcheck="false">
             <button class="btn ghost sm" data-act="toggle-key">${showKey ? 'Ocultar' : 'Ver'}</button></div>
-          <div class="key-actions"><button class="btn ghost sm" data-act="test" ${hasApiKey(p.id) ? '' : 'disabled'}>Probar conexiÃ³n</button><span class="muted small">ObtÃ©n tu clave en <b>${esc(p.keyUrl)}</b></span></div>
+          <div class="key-actions"><button class="btn ghost sm" data-act="test" ${hasApiKey(p.id) ? '' : 'disabled'}>Probar conexión</button><span class="muted small">Obtén tu clave en <b>${esc(p.keyUrl)}</b></span></div>
         </div>
         <button class="set-row" data-act="model"><span>Modelo</span><b>${esc(modelLabel(p.id, currentModel()))}</b>${icon('chevron')}</button>
       </div>
-      <p class="privacy-note ${p.id === 'google' ? 'warn' : ''}">${p.id === 'google' ? 'âš ï¸ ' : ''}${esc(p.privacy)}</p>
-      <p class="hint">Tus claves se guardan solo en este dispositivo y las imÃ¡genes van directo al proveedor que elijas. No uses este prototipo en un equipo compartido.</p>
+      <p class="privacy-note ${p.id === 'google' ? 'warn' : ''}">${p.id === 'google' ? '⚠️ ' : ''}${esc(p.privacy)}</p>
+      <p class="hint">Tus claves se guardan solo en este dispositivo y las imágenes van directo al proveedor que elijas. No uses este prototipo en un equipo compartido.</p>
       <h3 class="group-title">Pagos</h3>
       <div class="card list-card">
         <button class="set-row" data-act="methods"><span>Medios de pago</span><b>${paymentMethods().length}</b>${icon('chevron')}</button>
-      </div>      <h3 class="group-title">OrganizaciÃ³n</h3>
+      </div>      <h3 class="group-title">Organización</h3>
       <div class="card list-card">
-        <button class="set-row" data-act="categories"><span>CategorÃ­as</span><b>${visibleCategories().length} visibles</b>${icon('chevron')}</button>
+        <button class="set-row" data-act="categories"><span>Categorías</span><b>${visibleCategories().length} visibles</b>${icon('chevron')}</button>
         <button class="set-row" data-act="costcenters"><span>Centros de costo</span><b>${state.costCenters.length}</b>${icon('chevron')}</button>
         <button class="set-row" data-act="customize"><span>Orden del inicio</span>${icon('chevron')}</button>
       </div>
@@ -1505,7 +1505,7 @@ function openSettings() {
         <button class="set-row" data-act="sample"><span>Cargar datos de ejemplo</span>${icon('chevron')}</button>
         <button class="set-row danger" data-act="wipe"><span>Borrar todo</span>${icon('chevron')}</button>
       </div>
-      <p class="about">${logoSVG(36)}<span><b>Ritmo</b> Â· prototipo v0.3.0<br><small>Tus datos viven en este dispositivo.</small></span></p>`);
+      <p class="about">${logoSVG(36)}<span><b>Ritmo</b> · prototipo v0.3.0<br><small>Tus datos viven en este dispositivo.</small></span></p>`);
   };
   sheet.el.addEventListener('input', (e) => {
     if (e.target.matches('[data-name]')) { state.settings.name = e.target.value.slice(0, 30); save(); }
@@ -1527,7 +1527,7 @@ function openSettings() {
     if (!act) return;
     if (act === 'toggle-key') { showKey = !showKey; draw(); }
     if (act === 'currency') {
-      const v = await pick({ title: 'Moneda principal', options: CURRENCIES.map((c) => ({ value: c.code, label: `${c.code} Â· ${c.name}` })), selected: state.settings.currency });
+      const v = await pick({ title: 'Moneda principal', options: CURRENCIES.map((c) => ({ value: c.code, label: `${c.code} · ${c.name}` })), selected: state.settings.currency });
       if (v && v !== state.settings.currency) {
         state.settings.currency = v;
         save();
@@ -1537,7 +1537,7 @@ function openSettings() {
     }
     if (act === 'model') {
       const p = currentProvider();
-      const v = await pick({ title: `Modelo de ${p.name}`, options: p.models.map((m, i) => ({ value: m.id, label: m.name, hint: i === 0 ? `Recomendado Â· ${m.note}` : m.note })), selected: currentModel() });
+      const v = await pick({ title: `Modelo de ${p.name}`, options: p.models.map((m, i) => ({ value: m.id, label: m.name, hint: i === 0 ? `Recomendado · ${m.note}` : m.note })), selected: currentModel() });
       if (v) { state.settings.models = { ...state.settings.models, [p.id]: v }; save(); draw(); }
     }
     if (act === 'test') {
@@ -1551,7 +1551,7 @@ function openSettings() {
     if (act === 'costcenters') openCostCenters(draw);
     if (act === 'customize') openCustomize();
     if (act === 'sample') {
-      if (!(await confirmDialog({ title: 'Cargar datos de ejemplo', text: 'Se reemplazarÃ¡n tus gastos, presupuestos, medios de pago y centros de costo actuales por datos de ejemplo.', confirmText: 'Cargar ejemplo' }))) return;
+      if (!(await confirmDialog({ title: 'Cargar datos de ejemplo', text: 'Se reemplazarán tus gastos, presupuestos, medios de pago y centros de costo actuales por datos de ejemplo.', confirmText: 'Cargar ejemplo' }))) return;
       loadSampleData();
       animated.clear();
       sheet.close();
@@ -1559,7 +1559,7 @@ function openSettings() {
       toast('Datos de ejemplo cargados');
     }
     if (act === 'wipe') {
-      if (!(await confirmDialog({ title: 'Borrar todo', text: 'Se borrarÃ¡n todos tus gastos, presupuestos, categorÃ­as propias y ajustes de este dispositivo. No se puede deshacer.', confirmText: 'Borrar todo', danger: true, requireText: 'BORRAR' }))) return;
+      if (!(await confirmDialog({ title: 'Borrar todo', text: 'Se borrarán todos tus gastos, presupuestos, categorías propias y ajustes de este dispositivo. No se puede deshacer.', confirmText: 'Borrar todo', danger: true, requireText: 'BORRAR' }))) return;
       resetAll();
       animated.clear();
       sheet.close();
@@ -1574,20 +1574,20 @@ const SWATCHES = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
 function openCategories(onDone) {
   let color = 0;
-  const sheet = openSheet({ title: 'CategorÃ­as', full: true, body: '', onClose: onDone });
+  const sheet = openSheet({ title: 'Categorías', full: true, body: '', onClose: onDone });
   const draw = () => {
-    sheet.setBody(`<p class="lead">Elige quÃ© categorÃ­as predefinidas ves. Puedes crear las tuyas, pero las predefinidas no se editan.</p>
+    sheet.setBody(`<p class="lead">Elige qué categorías predefinidas ves. Puedes crear las tuyas, pero las predefinidas no se editan.</p>
       <h3 class="group-title">Predefinidas</h3>
       <div class="card list-card">${PREDEFINED_CATEGORIES.map((c) => `<label class="set-row"><span class="avatar sm" style="--cat:var(--c${c.color})">${c.emoji}</span><span class="grow">${esc(c.name)}</span>
         <input type="checkbox" class="switch" data-vis="${c.id}" ${state.visibleCategories.includes(c.id) ? 'checked' : ''}></label>`).join('')}</div>
-      <h3 class="group-title">Tus categorÃ­as</h3>
+      <h3 class="group-title">Tus categorías</h3>
       <div class="card list-card">${state.customCategories.length ? state.customCategories.map((c) => `<div class="set-row"><span class="avatar sm" style="--cat:var(--c${c.color})">${esc(c.emoji)}</span><span class="grow">${esc(c.name)}</span>
-        <button class="icon-btn" data-del="${c.id}" aria-label="Eliminar">${icon('trash')}</button></div>`).join('') : '<p class="widget-empty">AÃºn no creas categorÃ­as propias</p>'}</div>
+        <button class="icon-btn" data-del="${c.id}" aria-label="Eliminar">${icon('trash')}</button></div>`).join('') : '<p class="widget-empty">Aún no creas categorías propias</p>'}</div>
       <form class="card new-form" id="newcat">
-        <h3>+ Nueva categorÃ­a</h3>
-        <div class="two"><input class="input emoji-input" name="emoji" maxlength="4" placeholder="ðŸ™‚" aria-label="Emoji"><input class="input" name="name" placeholder="Nombre" maxlength="24" required></div>
+        <h3>+ Nueva categoría</h3>
+        <div class="two"><input class="input emoji-input" name="emoji" maxlength="4" placeholder="🙂" aria-label="Emoji"><input class="input" name="name" placeholder="Nombre" maxlength="24" required></div>
         <div class="swatches">${SWATCHES.map((i) => `<button type="button" class="swatch ${i === color ? 'on' : ''}" data-color="${i}" style="background:var(--c${i})" aria-label="Color ${i + 1}"></button>`).join('')}</div>
-        <button class="btn primary full" type="submit">Crear categorÃ­a</button>
+        <button class="btn primary full" type="submit">Crear categoría</button>
       </form>`);
   };
   sheet.el.addEventListener('change', (e) => {
@@ -1603,7 +1603,7 @@ function openCategories(onDone) {
     const del = e.target.closest('[data-del]');
     if (del) {
       const used = state.expenses.some((x) => x.categoryId === del.dataset.del);
-      if (!(await confirmDialog({ title: 'Eliminar categorÃ­a', text: used ? 'Los gastos de esta categorÃ­a pasarÃ¡n a â€œOtrosâ€.' : 'Se eliminarÃ¡ esta categorÃ­a.', confirmText: 'Eliminar', danger: true }))) return;
+      if (!(await confirmDialog({ title: 'Eliminar categoría', text: used ? 'Los gastos de esta categoría pasarán a “Otros”.' : 'Se eliminará esta categoría.', confirmText: 'Eliminar', danger: true }))) return;
       state.expenses.forEach((x) => { if (x.categoryId === del.dataset.del) x.categoryId = 'otros'; });
       state.budgets = state.budgets.filter((b) => b.categoryId !== del.dataset.del);
       state.customCategories = state.customCategories.filter((c) => c.id !== del.dataset.del);
@@ -1616,9 +1616,9 @@ function openCategories(onDone) {
     const data = new FormData(e.target);
     const name = String(data.get('name')).trim();
     if (!name) return;
-    state.customCategories.push({ id: uid('cat'), name, emoji: String(data.get('emoji')).trim() || 'ðŸ·ï¸', color });
+    state.customCategories.push({ id: uid('cat'), name, emoji: String(data.get('emoji')).trim() || '🏷️', color });
     save();
-    toast(`CategorÃ­a â€œ${name}â€ creada`);
+    toast(`Categoría “${name}” creada`);
     draw();
   });
   draw();
@@ -1627,12 +1627,12 @@ function openCategories(onDone) {
 function openCostCenters(onDone) {
   const sheet = openSheet({ title: 'Centros de costo', full: true, body: '', onClose: onDone });
   const draw = () => {
-    sheet.setBody(`<p class="lead">Agrupa gastos por propÃ³sito: el dÃ­a a dÃ­a, un viaje, una remodelaciÃ³n. Cada centro se desglosa por categorÃ­as.</p>
-      <div class="card list-card">${state.costCenters.map((c, i) => `<div class="set-row"><span class="avatar sm" style="--cat:var(--c6)">${esc(c.emoji || 'ðŸ“')}</span><span class="grow">${esc(c.name)}${i === 0 ? '<small>Principal</small>' : ''}</span>
+    sheet.setBody(`<p class="lead">Agrupa gastos por propósito: el día a día, un viaje, una remodelación. Cada centro se desglosa por categorías.</p>
+      <div class="card list-card">${state.costCenters.map((c, i) => `<div class="set-row"><span class="avatar sm" style="--cat:var(--c6)">${esc(c.emoji || '📁')}</span><span class="grow">${esc(c.name)}${i === 0 ? '<small>Principal</small>' : ''}</span>
         ${i > 0 ? `<button class="icon-btn" data-del="${c.id}" aria-label="Eliminar">${icon('trash')}</button>` : ''}</div>`).join('')}</div>
       <form class="card new-form" id="newcc">
         <h3>+ Nuevo centro de costo</h3>
-        <div class="two"><input class="input emoji-input" name="emoji" maxlength="4" placeholder="ðŸï¸" aria-label="Emoji"><input class="input" name="name" placeholder="Ej. Viaje a CancÃºn" maxlength="30" required></div>
+        <div class="two"><input class="input emoji-input" name="emoji" maxlength="4" placeholder="🏝️" aria-label="Emoji"><input class="input" name="name" placeholder="Ej. Viaje a Cancún" maxlength="30" required></div>
         <button class="btn primary full" type="submit">Crear centro de costo</button>
       </form>`);
   };
@@ -1640,7 +1640,7 @@ function openCostCenters(onDone) {
     const del = e.target.closest('[data-del]');
     if (!del) return;
     const cc = costCenterById(del.dataset.del);
-    if (!(await confirmDialog({ title: 'Eliminar centro de costo', text: `Los gastos de â€œ${esc(cc.name)}â€ pasarÃ¡n a â€œ${esc(state.costCenters[0].name)}â€ y se eliminarÃ¡n sus presupuestos.`, confirmText: 'Eliminar', danger: true }))) return;
+    if (!(await confirmDialog({ title: 'Eliminar centro de costo', text: `Los gastos de “${esc(cc.name)}” pasarán a “${esc(state.costCenters[0].name)}” y se eliminarán sus presupuestos.`, confirmText: 'Eliminar', danger: true }))) return;
     state.expenses.forEach((x) => { if (x.costCenterId === cc.id) x.costCenterId = state.costCenters[0].id; });
     state.budgets = state.budgets.filter((b) => b.costCenterId !== cc.id);
     state.costCenters = state.costCenters.filter((c) => c.id !== cc.id);
@@ -1652,9 +1652,9 @@ function openCostCenters(onDone) {
     const data = new FormData(e.target);
     const name = String(data.get('name')).trim();
     if (!name) return;
-    state.costCenters.push({ id: uid('cc'), name, emoji: String(data.get('emoji')).trim() || 'ðŸ“' });
+    state.costCenters.push({ id: uid('cc'), name, emoji: String(data.get('emoji')).trim() || '📁' });
     save();
-    toast(`â€œ${name}â€ creado`);
+    toast(`“${name}” creado`);
     draw();
   });
   draw();
@@ -1663,7 +1663,7 @@ function openCostCenters(onDone) {
 function openCustomize() {
   const sheet = openSheet({ title: 'Personalizar inicio', full: true, body: '' });
   const draw = () => {
-    sheet.setBody(`<p class="lead">Activa los grÃ¡ficos que quieres ver y ordÃ©nalos a tu gusto.</p>
+    sheet.setBody(`<p class="lead">Activa los gráficos que quieres ver y ordénalos a tu gusto.</p>
       <div class="card list-card">${state.dashboard.map((w, i) => {
         const meta = DASHBOARD_WIDGETS.find((d) => d.id === w.id);
         return `<div class="set-row"><span class="order-btns"><button class="icon-btn sm" data-move="${i}" data-d="-1" ${i === 0 ? 'disabled' : ''} aria-label="Subir">${icon('up')}</button><button class="icon-btn sm" data-move="${i}" data-d="1" ${i === state.dashboard.length - 1 ? 'disabled' : ''} aria-label="Bajar">${icon('down')}</button></span>
