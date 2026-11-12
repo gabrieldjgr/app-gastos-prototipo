@@ -90,7 +90,7 @@ export function loadSampleData() {
   }
 
   state.paymentMethods = [
-    { id: 'pm-bbva', name: 'TDC BBVA', type: 'credito', last4: '4521', owner: '' },
+    { id: 'pm-bbva', name: 'TDC BBVA', type: 'credito', last4: '4521', owner: '', payDay: addDays(today, 2).getDate(), cutDay: addDays(today, -18).getDate() },
     { id: 'pm-santander', name: 'TDC Santander', type: 'credito', last4: '8830', owner: '' },
     { id: 'pm-bbva-b', name: 'TDC BBVA Betzabeth', type: 'credito', last4: '1907', owner: 'Betzabeth' },
     { id: 'pm-bancomer', name: 'Cuenta Bancomer', type: 'cuenta', last4: '', owner: '' },

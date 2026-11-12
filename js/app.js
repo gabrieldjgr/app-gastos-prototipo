@@ -2,7 +2,7 @@
 import {
   state, save, subscribe, uid, allCategories, visibleCategories, categoryById, costCenterById,
   mostUsedCategories, addExpense, updateExpense, removeExpense, restoreExpense, confirmed, pending,
-  findDuplicate, resetAll, rateFor, paymentMethods, methodByName,
+  findDuplicate, resetAll, rateFor, paymentMethods, methodByName, setRate,
 } from './store.js';
 import { CURRENCIES, METHOD_TYPES, PERIODS, WEEKDAYS, DASHBOARD_WIDGETS, PREDEFINED_CATEGORIES } from './data.js';
 import {
@@ -22,6 +22,10 @@ import {
   hasApiKey, extractWithAI, extractDemo, AiError, PROVIDERS, providerById, currentProvider, currentModel, modelLabel, testConnection,
 } from './ai.js';
 import { openImageEditor } from './imageeditor.js';
+import {
+  NOTICE_TYPES, homeCandidates, pickHomeNotice, allowed, resolveNotice, resetNotices, typeEnabled,
+  merchantCandidates, ruleFor, normMerchant, unusualInfo, staleRate, isRecurring, recurringCandidates,
+} from './proactive.js';
 
 const app = document.getElementById('app');
 const view = {
@@ -188,9 +192,7 @@ function renderHome() {
     action: `<button class="icon-btn" data-action="settings" aria-label="Ajustes">${icon('gear')}</button>`,
   });
   if (pend > 0) html += `<button class="notice accent" data-action="tab" data-tab="review"><span>📥</span><span><b>${pend} ${pend === 1 ? 'movimiento' : 'movimientos'}</b> por revisar</span>${icon('chevron')}</button>`;
-  if (state.expenses.length && (last === null || last >= 4)) {
-    html += `<button class="notice" data-action="batch"><span>⏰</span><span>${last === null ? 'Aún no te pones al día con tu banco' : `Hace ${last} días que no te pones al día`}</span>${icon('chevron')}</button>`;
-  }
+  html += homeNoticeHTML();
   for (const w of state.dashboard) {
     if (!w.on) continue;
     if (w.id === 'pace') html += paceCarousel();
@@ -201,6 +203,91 @@ function renderHome() {
   }
   html += `<button class="link-btn" data-action="customize">Personalizar inicio</button>`;
   return html;
+}
+
+// ---------------------------------------------------------------- Avisos proactivos
+
+const noticeCache = new Map(); // clave → aviso mostrado, para resolver sus botones
+
+function noticeCard({ key, emoji, title, text, actions, cls = '' }) {
+  return `<div class="card proactive-card ${cls}" data-notice="${esc(key)}"><span class="proactive-emoji">${emoji}</span>
+    <div class="proactive-main"><b>${title}</b>${text ? `<small>${text}</small>` : ''}
+      <div class="btn-row">${actions.map(([label, act], i) => `<button class="btn ${i === 0 ? 'primary' : 'ghost'} sm" data-action="notice" data-id="${esc(key)}" data-do="${act}">${label}</button>`).join('')}</div></div></div>`;
+}
+
+const methodLabel = (m) => `${esc(m.name)}${m.last4 && !m.name.includes(m.last4) ? ` ••${m.last4}` : ''}`;
+
+function homeNoticeHTML() {
+  const c = pickHomeNotice(homeCandidates());
+  if (!c) return '';
+  noticeCache.set(c.key, c);
+  const weekday = (d) => (diffFromToday(d) === 0 ? 'hoy' : diffFromToday(d) === 1 ? 'mañana' : `el ${d.toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric' })}`);
+  const card = {
+    due: () => ({ emoji: '📅', title: `Tu ${methodLabel(c.method)} vence ${weekday(c.due)}`, text: c.total > 0 ? `Llevas <b>${money(c.total)}</b> en este corte.` : 'No tengo gastos registrados en este corte.', actions: [['Ya pagué', 'done'], ['Ver gastos', 'view']] }),
+    pace: () => {
+      const cat = c.budget.categoryId ? categoryById(c.budget.categoryId).name : c.budget.name;
+      return { emoji: '🏃', title: `Vas ${Math.round(c.over * 100)} % arriba en ${esc(cat)}`, text: `A este ritmo cierras en <b>${money(c.stats.projected)}</b> de ${money(c.stats.amount)}.`, actions: [['Ver detalle', 'view'], ['Entendido', 'done']] };
+    },
+    period: () => ({ emoji: '🗓️', title: `Empezó el período de ${c.budget.groupId ? 'tu plan ' : ''}${esc(c.budget.name)}`, text: `Tienes ${money(c.budget.amount)} hasta el ${dateShort(toISO(addDays(budgetWindow(c.budget).end, -1)))}. ¿Lo mantengo igual?`, actions: [['Mantener', 'done'], ['Ajustar', 'edit']] }),
+    stale: () => (c.method
+      ? { emoji: '⏰', title: `Tu ${methodLabel(c.method)} no se actualiza desde el ${dateShort(c.last)}`, text: '¿Importamos sus movimientos?', actions: [['Importar', 'import'], ['Ahora no', 'no']] }
+      : { emoji: '⏰', title: c.ago === null ? 'Aún no te pones al día con tu banco' : `Hace ${c.ago} días que no te pones al día`, text: 'Sube capturas o el archivo de tu banco y la IA hace el resto.', actions: [['Ponerme al día', 'import'], ['Ahora no', 'no']] }),
+    recurring: () => ({ emoji: '🔁', title: `${esc(c.name)} ${money(c.amount)} se repite cada mes`, text: '¿Lo marco como cargo recurrente? Lo verás con 🔁 en tus gastos.', actions: [['Marcar', 'mark'], ['No', 'no']] }),
+  }[c.type]();
+  return noticeCard({ key: c.key, ...card, cls: 'home-notice' });
+}
+
+function diffFromToday(d) {
+  const t = new Date();
+  return Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - new Date(t.getFullYear(), t.getMonth(), t.getDate())) / 86400000);
+}
+
+// Avisos en la bandeja de revisión: tarjetas nuevas y comercios por aprender (máximo 3 a la vez).
+function reviewNoticesHTML(pend) {
+  const cards = unknownCards(pend).map((u) => {
+    const key = `card:${u.last4}`;
+    noticeCache.set(key, { type: 'card', key, ...u });
+    return noticeCard({ key, emoji: '💳', title: `No reconocí la tarjeta ••${u.last4}`, text: `Aparece en ${u.count} ${u.count === 1 ? 'movimiento' : 'movimientos'}. Si la agregas, se los asigno y la próxima vez la reconozco sola.`, actions: [['Agregar tarjeta', 'add'], ['No es mía', 'no']] });
+  });
+  const merchants = typeEnabled('merchant') ? merchantCandidates().slice(0, 1).map((m) => {
+    noticeCache.set(m.key, m);
+    const cat = categoryById(m.categoryId);
+    return noticeCard({ key: m.key, emoji: '🧠', title: `¿Siempre pongo “${esc(m.name)}” en ${cat.emoji} ${esc(cat.name)}?`, text: `Lo hiciste ${m.count} veces. Así la próxima vez lo clasifico solo.`, actions: [['Sí, siempre', 'rule'], ['Solo esta vez', 'no']] });
+  }) : [];
+  return [...cards, ...merchants].slice(0, 3).join('');
+}
+
+async function noticeDo(key, act) {
+  const c = noticeCache.get(key);
+  if (!c) return;
+  if (act === 'no') {
+    resolveNotice(key, 'no');
+    toast(c.type === 'card' ? `No volveré a preguntar por ••${c.last4}` : 'Listo, no vuelvo a preguntar por esto', { undo: () => { delete state.notices[key]; save(); } });
+    return;
+  }
+  if (act === 'done') { resolveNotice(key, 'done'); return; }
+  if (c.type === 'due' && act === 'view') { resolveNotice(key, 'acted'); view.filters = { ...view.filters, method: c.method.name, period: '90' }; switchTab('expenses'); }
+  if (c.type === 'pace' && act === 'view') { resolveNotice(key, 'acted'); openBudgetDetail(c.budget.id); }
+  if (c.type === 'period' && act === 'edit') { resolveNotice(key, 'done'); if (c.budget.groupId) openPlanEditor({ groupId: c.budget.groupId }); else openBudgetEditor(c.budget); }
+  if (c.type === 'stale' && act === 'import') { resolveNotice(key, 'acted'); openBatch({ account: c.method?.name || '' }); }
+  if (c.type === 'recurring' && act === 'mark') {
+    state.recurring[c.norm] = { name: c.name, amount: c.amount, categoryId: c.categoryId, day: c.day };
+    resolveNotice(key, 'done');
+    toast(`${c.name} marcado como recurrente 🔁`);
+  }
+  if (c.type === 'card' && act === 'add') await addUnknownCard(c.last4);
+  if (c.type === 'merchant' && act === 'rule') {
+    state.merchantRules[c.norm] = c.categoryId;
+    let n = 0;
+    for (const e of pending()) {
+      if (normMerchant(e.merchant) !== c.norm) continue;
+      e.categoryId = c.categoryId;
+      if (e.ai) { e.ai.pregunta = ''; e.ai.opciones = []; e.ai.confianza = 'alta'; }
+      n++;
+    }
+    resolveNotice(key, 'done');
+    toast(`Listo: “${c.name}” siempre irá a ${categoryById(c.categoryId).name}${n ? ` (${n} pendiente${n === 1 ? '' : 's'} actualizado${n === 1 ? '' : 's'})` : ''}`);
+  }
 }
 
 function widget(title, body, sub = '') {
@@ -341,7 +428,7 @@ function expenseRow(e) {
     <div class="swipe-bg left">${icon('trash')}<span>Eliminar</span></div>
     <div class="swipe-content" data-action="edit-expense" data-id="${e.id}">
       <span class="avatar" style="--cat:var(--c${c.color})">${c.emoji}</span>
-      <span class="row-main"><span class="row-title">${esc(e.merchant || e.description || 'Gasto')}</span><span class="row-sub">${esc(c.name)} · ${esc(cc?.name || '')}</span></span>
+      <span class="row-main"><span class="row-title">${esc(e.merchant || e.description || 'Gasto')}${isRecurring(e) ? ' <span class="rec-badge" title="Cargo recurrente">🔁</span>' : ''}</span><span class="row-sub">${esc(c.name)} · ${esc(cc?.name || '')}</span></span>
       <span class="row-amt"><span class="num">${money(e.amountBase)}</span>${foreign ? `<small>${money(e.amount, e.currency)}</small>` : ''}</span>
     </div>
   </div>`;
@@ -371,7 +458,7 @@ function reviewGroups() {
   const pend = pending().sort((a, b) => b.date.localeCompare(a.date));
   const notExpense = pend.filter((e) => e.ai?.tipo && e.ai.tipo !== 'gasto');
   const rest = pend.filter((e) => !notExpense.includes(e));
-  const needs = rest.filter((e) => e.ai?.confianza === 'baja' || e.ai?.dupOf);
+  const needs = rest.filter((e) => e.ai?.confianza === 'baja' || e.ai?.dupOf || unusualInfo(e));
   const ready = rest.filter((e) => !needs.includes(e));
   return { pend, needs, ready, notExpense };
 }
@@ -380,14 +467,14 @@ function renderReview() {
   const { pend, needs, ready, notExpense } = reviewGroups();
   if (!pend.length) {
     view.reviewBase = 0;
-    return `${topbar('Revisar')}${emptyState('✅', '¡Estás al día!', 'Cuando subas capturas o archivos del banco, los movimientos aparecerán aquí para que los confirmes en segundos.', '<button class="btn primary" data-action="batch">Ponerme al día</button>')}`;
+    return `${topbar('Revisar')}${reviewNoticesHTML([])}${emptyState('✅', '¡Estás al día!', 'Cuando subas capturas o archivos del banco, los movimientos aparecerán aquí para que los confirmes en segundos.', '<button class="btn primary" data-action="batch">Ponerme al día</button>')}`;
   }
   view.reviewBase = Math.max(view.reviewBase, pend.length);
   const progress = 1 - pend.length / view.reviewBase;
   let html = `${topbar(`${pend.length} por revisar`)}
     <div class="review-top">
       <div class="thin-progress"><span style="--w:${(progress * 100).toFixed(1)}%"></span></div>
-      ${unknownCards(pend).map(unknownCardNotice).join('')}
+      ${reviewNoticesHTML(pend)}
       ${ready.length ? `<button class="btn primary full" data-action="confirm-safe">${icon('check')} Confirmar los ${ready.length} seguros</button>` : ''}
     </div>`;
   if (needs.length) {
@@ -408,21 +495,13 @@ function renderReview() {
 
 // Tarjetas o cuentas que aparecen en los movimientos pero no están registradas.
 function unknownCards(pend) {
-  const ignored = state.settings.ignoredCards || [];
   const map = new Map();
   for (const e of pend) {
     const d = e.ai?.last4;
-    if (!d || ignored.includes(d) || state.paymentMethods.some((m) => m.last4 === d)) continue;
+    if (!d || !allowed(`card:${d}`, 'card') || state.paymentMethods.some((m) => m.last4 === d)) continue;
     map.set(d, (map.get(d) || 0) + 1);
   }
   return [...map.entries()].map(([last4, count]) => ({ last4, count }));
-}
-
-function unknownCardNotice({ last4, count }) {
-  return `<div class="card proactive-card"><span class="proactive-emoji">💳</span>
-    <div class="proactive-main"><b>No reconocí la tarjeta ••${last4}</b>
-      <small>Aparece en ${count} ${count === 1 ? 'movimiento' : 'movimientos'}. Si la agregas, se los asigno y la próxima vez la reconozco sola.</small>
-      <div class="btn-row"><button class="btn primary sm" data-action="add-card" data-id="${last4}">Agregar tarjeta</button><button class="btn ghost sm" data-action="ignore-card" data-id="${last4}">No es mía</button></div></div></div>`;
 }
 
 async function addUnknownCard(last4) {
@@ -434,12 +513,6 @@ async function addUnknownCard(last4) {
   toast(`“${created.name}” asignada a ${n} ${n === 1 ? 'movimiento' : 'movimientos'}`);
 }
 
-function ignoreUnknownCard(last4) {
-  state.settings.ignoredCards = [...(state.settings.ignoredCards || []), last4];
-  save();
-  toast(`No volveré a preguntar por ••${last4}`, { undo: () => { state.settings.ignoredCards = state.settings.ignoredCards.filter((x) => x !== last4); save(); } });
-}
-
 function sourceLabel(e) {
   return { batch: 'del banco', receipt: 'recibo', file: 'archivo', manual: 'manual' }[e.source] || '';
 }
@@ -447,6 +520,7 @@ function sourceLabel(e) {
 function needsCard(e) {
   const c = categoryById(e.categoryId);
   const dup = e.ai?.dupOf ? state.expenses.find((x) => x.id === e.ai.dupOf) : null;
+  const unusual = unusualInfo(e);
   return `<article class="rcard swipe" data-id="${e.id}">
     <div class="swipe-bg right">${icon('check')}</div><div class="swipe-bg left">${icon('x')}</div>
     <div class="swipe-content">
@@ -458,6 +532,9 @@ function needsCard(e) {
       ${dup ? `<div class="dup"><span class="tag warn">Posible duplicado</span>
           <p class="dup-text">Ya tienes <b>${esc(dup.merchant)}</b> · ${dateShort(dup.date)} · ${money(dup.amount, dup.currency)}</p>
           <div class="btn-row"><button class="btn ghost sm" data-action="dup-same" data-id="${e.id}">Es el mismo</button><button class="btn ghost sm" data-action="dup-two" data-id="${e.id}">Son dos</button></div></div>` : ''}
+      ${unusual ? `<div class="dup unusual"><span class="tag warn">Gasto inusual</span>
+          <p class="dup-text">Es <b>${unusual.times} veces</b> tu gasto habitual en ${esc(c.name)} (~${money(unusual.median)}). ¿Está bien?</p>
+          <div class="btn-row"><button class="btn ghost sm" data-action="unusual-ok" data-id="${e.id}">Sí, está bien</button><button class="btn ghost sm" data-action="edit-pending" data-id="${e.id}">Revisar</button></div></div>` : ''}
       ${e.ai?.pregunta ? `<div class="ai-q"><p class="bubble">${esc(e.ai.pregunta)}</p>
           <div class="chip-row">${(e.ai.opciones?.length ? e.ai.opciones : [e.categoryId]).map((id) => { const oc = categoryById(id); return `<button class="chip answer" data-action="answer" data-id="${e.id}" data-cat="${id}">${oc.emoji} ${esc(oc.name)}</button>`; }).join('')}
           <button class="chip answer" data-action="edit-pending" data-id="${e.id}">Otra…</button></div></div>` : ''}
@@ -1036,7 +1113,8 @@ function openExpenseForm({ expense = null, prefill = null, uncertain = {} } = {}
         <span class="amount-big"><span class="hero-sym">${esc(currencyPrefix(f.currency).trim())}</span>${amountDisplay()}</span>
         ${unsure.amount ? '<span class="unsure-q">?</span>' : ''}
       </div>
-      ${foreign ? `<div class="rate-line">≈ <b>${money(parseAmount(f.amount) * f.rate)}</b> · tasa <input class="rate-input" inputmode="decimal" value="${f.rate}" aria-label="Tasa de cambio"></div>` : ''}
+      ${foreign ? `<div class="rate-line">≈ <b>${money(parseAmount(f.amount) * f.rate)}</b> · tasa <input class="rate-input" inputmode="decimal" value="${f.rate}" aria-label="Tasa de cambio"></div>
+        ${(() => { const st = staleRate(f.currency); return st && !f.rateTouched ? `<p class="rate-stale">⚠️ Tasa ${st.date ? `del ${dateShort(st.date)}` : 'sin fecha'}. ¿Sigue vigente? Cámbiala arriba si no.</p>` : ''; })()}` : ''}
       <input class="input desc ${unsure.merchant ? 'unsure' : ''}" placeholder="¿En qué fue? (ej. Walmart)" value="${esc(f.merchant)}" data-f="merchant">
       <div class="chip-row scroll cats ${unsure.categoryId ? 'unsure' : ''}">
         ${cats.map((c) => `<button class="chip cat ${f.categoryId === c.id ? 'on' : ''}" data-cat="${c.id}">${c.emoji} ${esc(c.name)}</button>`).join('')}
@@ -1080,7 +1158,7 @@ function openExpenseForm({ expense = null, prefill = null, uncertain = {} } = {}
       merchant: f.merchant.trim() || categoryById(f.categoryId).name, description: base.description || f.merchant.trim(),
       categoryId: f.categoryId, date: f.date, costCenterId: f.costCenterId, paymentMethod: f.paymentMethod,
     };
-    if (data.currency !== state.settings.currency) state.settings.rates[data.currency] = data.rate;
+    if (data.currency !== state.settings.currency) setRate(data.currency, data.rate);
     if (expense) {
       updateExpense(expense.id, { ...data, status: 'confirmed', ai: undefined });
       toast(isPending ? 'Gasto confirmado' : 'Cambios guardados');
@@ -1109,7 +1187,7 @@ function openExpenseForm({ expense = null, prefill = null, uncertain = {} } = {}
     if (!act) return;
     if (act === 'currency') {
       const v = await pick({ title: 'Moneda', options: CURRENCIES.map((c) => ({ value: c.code, label: `${c.code} · ${c.name}` })), selected: f.currency });
-      if (v) { f.currency = v; f.rate = rateFor(v); draw(); }
+      if (v) { f.currency = v; f.rate = rateFor(v); f.rateTouched = false; draw(); }
     }
     if (act === 'more-cats') {
       const v = await pick({ title: 'Categoría', options: visibleCategories().map((c) => ({ value: c.id, label: c.name, emoji: c.emoji, color: c.color })), selected: f.categoryId });
@@ -1130,7 +1208,19 @@ function openExpenseForm({ expense = null, prefill = null, uncertain = {} } = {}
   sheet.el.addEventListener('input', (e) => {
     const field = e.target.dataset.f;
     if (field) { f[field] = e.target.value; delete unsure[field]; e.target.classList.remove('unsure'); }
+    // Comercio con regla aprendida: preselecciona su categoría si aún no hay una elegida.
+    if (field === 'merchant' && !f.categoryId) {
+      const rule = ruleFor(f.merchant);
+      if (rule) {
+        f.categoryId = rule;
+        const chip = sheet.body.querySelector(`[data-cat="${rule}"]`);
+        if (chip) sheet.body.querySelectorAll('.chip.cat').forEach((x) => x.classList.toggle('on', x === chip));
+        else { const pos = e.target.selectionStart; draw(); const inp = sheet.body.querySelector('[data-f="merchant"]'); inp.focus(); inp.setSelectionRange(pos, pos); }
+      }
+    }
     if (e.target.classList.contains('rate-input')) {
+      f.rateTouched = true;
+      sheet.body.querySelector('.rate-stale')?.remove();
       f.rate = parseAmount(e.target.value) || 1;
       const b = sheet.body.querySelector('.rate-line b');
       if (b) b.textContent = money(parseAmount(f.amount) * f.rate);
@@ -1202,7 +1292,7 @@ function openReceipt() {
       openExpenseForm({
         prefill: {
           amount: mov.monto, currency: mov.moneda, merchant: mov.comercio, description: mov.descripcion,
-          categoryId: mov.categoria, date: mov.fecha, paymentMethod: mov.metodo_pago, source: 'receipt',
+          categoryId: ruleFor(mov.comercio) || mov.categoria, date: mov.fecha, paymentMethod: mov.metodo_pago, source: 'receipt',
         },
         uncertain: low ? { categoryId: true } : {},
       });
@@ -1218,9 +1308,9 @@ function openReceipt() {
 }
 
 // Ponerme al día: varios archivos → (recortar/tapar) → bandeja de revisión.
-function openBatch() {
+function openBatch({ account: preset = '' } = {}) {
   const files = []; // { original, file, edits, url }
-  let account = '';
+  let account = typeof preset === 'string' ? preset : '';
   const sheet = openSheet({ title: 'Ponerme al día', full: true, body: '' });
   const isImg = (f) => f.original.type.startsWith('image/');
   const kind = (f) => (isImg(f) ? 'IMG' : f.original.name.toLowerCase().endsWith('.pdf') ? 'PDF' : /\.xlsx?$/i.test(f.original.name) ? 'XLS' : 'CSV');
@@ -1288,6 +1378,9 @@ function openBatch() {
         const dup = m.tipo === 'gasto' ? findDuplicate(candidate, created.map((c) => c.id)) : null;
         const byDigits = m.ultimos_digitos ? state.paymentMethods.find((x) => x.last4 === m.ultimos_digitos && !x.archived) : null;
         const method = methodByName(m.metodo_pago) ? m.metodo_pago : byDigits ? byDigits.name : account;
+        // Regla aprendida: el comercio siempre va a la misma categoría.
+        const rule = ruleFor(m.comercio);
+        if (rule && rule !== m.categoria) { m.categoria = rule; m.pregunta = ''; m.opciones = []; m.confianza = 'alta'; }
         const e = addExpenseSilently({
           date: m.fecha, merchant: m.comercio, description: m.descripcion, amount: m.monto, currency: m.moneda,
           categoryId: m.categoria, paymentMethod: method, status: 'pending', source: 'batch',
@@ -1327,7 +1420,7 @@ function addExpenseSilently(data) {
 const methodType = (id) => METHOD_TYPES.find((t) => t.id === id) || METHOD_TYPES[2];
 
 function methodSub(m) {
-  return [methodType(m.type).short, m.last4 ? `••${m.last4}` : '', m.owner].filter(Boolean).join(' · ');
+  return [methodType(m.type).short, m.last4 ? `••${m.last4}` : '', m.payDay ? `paga el ${m.payDay}` : '', m.owner].filter(Boolean).join(' · ');
 }
 
 function methodOption(m) {
@@ -1403,6 +1496,9 @@ function openMethodEditor(existing, prefill = {}) {
         <label class="field"><span>Nombre</span><input class="input" name="name" value="${esc(m.name)}" maxlength="28" placeholder="Ej. TDC BBVA" required><small class="field-error" hidden></small></label>
         <div class="field"><span>Tipo</span><div class="chip-row wrap">${METHOD_TYPES.map((t) => `<button type="button" class="chip ${m.type === t.id ? 'on' : ''}" data-type="${t.id}">${t.emoji} ${t.name}</button>`).join('')}</div></div>
         ${digits ? `<label class="field"><span>Últimos 4 dígitos <small>(opcional)</small></span><input class="input num" name="last4" value="${esc(m.last4)}" inputmode="numeric" maxlength="4" placeholder="1234"><small class="hint">Ayuda a la IA a reconocer tus estados de cuenta. Nunca escribas el número completo.</small></label>` : ''}
+        ${m.type === 'credito' ? `<div class="two"><label class="field"><span>Día de corte <small>(opcional)</small></span><input class="input num" name="cutDay" value="${esc(m.cutDay || '')}" inputmode="numeric" maxlength="2" placeholder="Ej. 20"></label>
+          <label class="field"><span>Día límite de pago</span><input class="input num" name="payDay" value="${esc(m.payDay || '')}" inputmode="numeric" maxlength="2" placeholder="Ej. 10"></label></div>
+          <small class="hint">Con el día de pago te aviso 3 días antes y te digo cuánto llevas en el corte.</small>` : ''}
         <label class="field"><span>Titular <small>(opcional)</small></span><input class="input" name="owner" value="${esc(m.owner)}" maxlength="24" placeholder="Ej. Betzabeth"><small class="hint">Útil si tu pareja tiene una tarjeta del mismo banco.</small></label>
         <button class="btn primary full big" type="submit">Guardar</button>
         ${existing ? `<button class="btn danger-ghost full" type="button" data-archive>${used ? 'Archivar' : 'Eliminar'}</button>
@@ -1411,8 +1507,9 @@ function openMethodEditor(existing, prefill = {}) {
     };
     sheet.el.addEventListener('input', (e) => {
       if (!e.target.name) return;
-      m[e.target.name] = e.target.name === 'last4' ? e.target.value.replace(/\D/g, '') : e.target.value;
-      if (e.target.name === 'last4') e.target.value = m.last4;
+      const digits = ['last4', 'cutDay', 'payDay'].includes(e.target.name);
+      m[e.target.name] = digits ? e.target.value.replace(/\D/g, '') : e.target.value;
+      if (digits) e.target.value = m[e.target.name];
     });
     sheet.el.addEventListener('click', async (e) => {
       const t = e.target.closest('[data-type]');
@@ -1435,7 +1532,8 @@ function openMethodEditor(existing, prefill = {}) {
       const err = sheet.body.querySelector('.field-error');
       const clash = state.paymentMethods.find((x) => x.id !== m.id && x.name.toLowerCase() === name.toLowerCase());
       if (!name || clash) { err.hidden = false; err.textContent = clash ? 'Ya tienes un medio con ese nombre' : 'Ponle un nombre'; return; }
-      const clean = { ...m, name, last4: (m.last4 || '').slice(0, 4), owner: m.owner.trim() };
+      const day = (v) => { const n = Number(v); return n >= 1 && n <= 31 ? n : ''; };
+      const clean = { ...m, name, last4: (m.last4 || '').slice(0, 4), owner: m.owner.trim(), cutDay: m.type === 'credito' ? day(m.cutDay) : '', payDay: m.type === 'credito' ? day(m.payDay) : '' };
       const i = state.paymentMethods.findIndex((x) => x.id === m.id);
       if (i >= 0) {
         const old = state.paymentMethods[i].name;
@@ -1450,6 +1548,46 @@ function openMethodEditor(existing, prefill = {}) {
     });
     draw();
   });
+}
+
+// ---------------------------------------------------------------- Ajustes de avisos
+
+function openNoticeSettings(onDone) {
+  const sheet = openSheet({ title: 'Avisos inteligentes', full: true, body: '', onClose: onDone });
+  const draw = () => {
+    const rules = Object.entries(state.merchantRules);
+    const rec = Object.entries(state.recurring);
+    const silenced = Object.values(state.notices).filter((n) => n.status === 'no' || n.until).length;
+    sheet.setBody(`<p class="lead">La app te avisa cuando nota algo útil. Para que no moleste: como máximo <b>un aviso al día</b> en Inicio, un “No” no vuelve a preguntar por lo mismo, y si ignoras un aviso dos veces se pausa 30 días.</p>
+      <div class="card list-card">${NOTICE_TYPES.map((t) => `<label class="set-row"><span class="grow">${esc(t.name)}<small>${esc(t.desc)}</small></span>
+        <input type="checkbox" class="switch" data-type="${t.id}" ${typeEnabled(t.id) ? 'checked' : ''}></label>`).join('')}</div>
+      <h3 class="group-title">Comercios aprendidos</h3>
+      <div class="card list-card">${rules.length ? rules.map(([norm, cat]) => { const c = categoryById(cat); return `<div class="set-row"><span class="avatar sm" style="--cat:var(--c${c.color})">${c.emoji}</span><span class="grow">${esc(norm.replace(/\b\w/g, (x) => x.toUpperCase()))}<small>siempre a ${esc(c.name)}</small></span>
+        <button class="icon-btn" data-del-rule="${esc(norm)}" aria-label="Olvidar">${icon('trash')}</button></div>`; }).join('') : '<p class="widget-empty">Aún no hay comercios aprendidos</p>'}</div>
+      <h3 class="group-title">Cargos recurrentes</h3>
+      <div class="card list-card">${rec.length ? rec.map(([norm, r]) => `<div class="set-row"><span class="avatar sm" style="--cat:var(--c11)">🔁</span><span class="grow">${esc(r.name)}<small>${money(r.amount)} · cerca del día ${r.day}</small></span>
+        <button class="icon-btn" data-del-rec="${esc(norm)}" aria-label="Quitar">${icon('trash')}</button></div>`).join('') : '<p class="widget-empty">Ninguno marcado todavía</p>'}</div>
+      ${silenced ? `<button class="btn ghost full" data-act="reset">Volver a mostrar avisos descartados (${silenced})</button>` : ''}`);
+  };
+  sheet.el.addEventListener('change', (e) => {
+    const t = e.target.dataset.type;
+    if (!t) return;
+    state.settings.noticeTypes = { ...state.settings.noticeTypes, [t]: e.target.checked };
+    save();
+  });
+  sheet.el.addEventListener('click', async (e) => {
+    const r = e.target.closest('[data-del-rule]');
+    if (r) { delete state.merchantRules[r.dataset.delRule]; save(); draw(); return; }
+    const rc = e.target.closest('[data-del-rec]');
+    if (rc) { delete state.recurring[rc.dataset.delRec]; save(); draw(); return; }
+    if (e.target.closest('[data-act="reset"]')) {
+      if (!(await confirmDialog({ title: 'Volver a mostrar avisos', text: 'Los avisos que descartaste o pausaste podrán aparecer de nuevo.', confirmText: 'Restablecer' }))) return;
+      resetNotices();
+      toast('Avisos restablecidos');
+      draw();
+    }
+  });
+  draw();
 }
 
 // ---------------------------------------------------------------- Ajustes
@@ -1494,6 +1632,10 @@ function openSettings() {
       <h3 class="group-title">Pagos</h3>
       <div class="card list-card">
         <button class="set-row" data-act="methods"><span>Medios de pago</span><b>${paymentMethods().length}</b>${icon('chevron')}</button>
+      </div>
+      <h3 class="group-title">Avisos</h3>
+      <div class="card list-card">
+        <button class="set-row" data-act="notices"><span>Avisos inteligentes</span><b>${NOTICE_TYPES.filter((t) => typeEnabled(t.id)).length} de ${NOTICE_TYPES.length} activos</b>${icon('chevron')}</button>
       </div>      <h3 class="group-title">Organización</h3>
       <div class="card list-card">
         <button class="set-row" data-act="categories"><span>Categorías</span><b>${visibleCategories().length} visibles</b>${icon('chevron')}</button>
@@ -1505,7 +1647,7 @@ function openSettings() {
         <button class="set-row" data-act="sample"><span>Cargar datos de ejemplo</span>${icon('chevron')}</button>
         <button class="set-row danger" data-act="wipe"><span>Borrar todo</span>${icon('chevron')}</button>
       </div>
-      <p class="about">${logoSVG(36)}<span><b>Ritmo</b> · prototipo v0.3.0<br><small>Tus datos viven en este dispositivo.</small></span></p>`);
+      <p class="about">${logoSVG(36)}<span><b>Ritmo</b> · prototipo v0.4.0<br><small>Tus datos viven en este dispositivo.</small></span></p>`);
   };
   sheet.el.addEventListener('input', (e) => {
     if (e.target.matches('[data-name]')) { state.settings.name = e.target.value.slice(0, 30); save(); }
@@ -1547,6 +1689,7 @@ function openSettings() {
       draw();
     }
     if (act === 'methods') openPaymentMethods(draw);
+    if (act === 'notices') openNoticeSettings(draw);
     if (act === 'categories') openCategories(draw);
     if (act === 'costcenters') openCostCenters(draw);
     if (act === 'customize') openCustomize();
@@ -1695,7 +1838,7 @@ function onClick(e) {
   const actions = {
     tab: () => switchTab(el.dataset.tab),
     'add-menu': openAddMenu,
-    batch: openBatch,
+    batch: () => openBatch(),
     settings: openSettings,
     customize: openCustomize,
     'new-budget': openNewBudget,
@@ -1717,8 +1860,8 @@ function onClick(e) {
     'dup-two': () => { const x = state.expenses.find((v) => v.id === id); if (x) updateExpense(id, { ai: { ...x.ai, dupOf: undefined } }); },
     'is-expense': () => { const x = state.expenses.find((v) => v.id === id); if (x) updateExpense(id, { ai: { ...x.ai, tipo: 'gasto' } }); },
     'confirm-safe': confirmSafe,
-    'add-card': () => addUnknownCard(id),
-    'ignore-card': () => ignoreUnknownCard(id),
+    notice: () => noticeDo(id, el.dataset.do),
+    'unusual-ok': () => { const x = state.expenses.find((v) => v.id === id); if (x) updateExpense(id, { ai: { ...x.ai, unusualOk: true } }); },
     'discard-nonexpense': discardNonExpense,
     expand: () => { if (e.target.closest('button')) return; view.expanded = view.expanded === id ? null : id; rerender(); },
   };

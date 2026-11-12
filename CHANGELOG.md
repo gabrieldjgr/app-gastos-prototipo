@@ -3,6 +3,33 @@
 Todos los cambios notables de este proyecto se documentan aquí.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/); versionado según [SemVer](https://semver.org/lang/es/).
 
+## [0.4.0] - 2026-11-12
+
+### Añadido
+- Avisos proactivos en Inicio:
+  - **Pago de tarjeta**, 3 días antes de la fecha límite, con lo que llevas en el corte. Hay nuevos campos de día de corte y día de pago en las tarjetas de crédito.
+  - **Ritmo**: cuando un presupuesto va más de 15 % arriba de lo ideal pasado el día 7.
+  - **Inicio de período** de un plan, con opción de ajustarlo.
+  - **Importación atrasada** por medio de pago (más de 10 días).
+  - **Cargos recurrentes**: mismo comercio, monto y día del mes en 2 o 3 meses. Se marcan con 🔁.
+- Avisos en la bandeja de revisión:
+  - **Aprender comercios**: "¿Siempre pongo Uber en Transporte?". Las reglas se aplican en las lecturas, en los recibos y al escribir a mano.
+  - **Tarjeta no registrada**, integrada al nuevo sistema de avisos.
+  - **Gasto inusual**: 3 o más veces la mediana de su categoría, con confirmación.
+- Aviso de tasa de cambio con más de 7 días al registrar en otra moneda.
+- Reglas anti-molestia:
+  - máximo un aviso al día en Inicio;
+  - "No" silencia ese aviso para siempre;
+  - si se ignora dos veces, se pausa 30 días;
+  - máximo 3 avisos a la vez en la bandeja.
+- Ajustes → Avisos inteligentes:
+  - interruptor por tipo de aviso;
+  - lista de comercios aprendidos y de cargos recurrentes;
+  - opción para volver a mostrar los avisos descartados.
+
+### Corregido
+- Acentos y emojis dañados por la codificación en la v0.3.0 publicada.
+
 ## [0.3.0] - 2026-11-12
 
 ### Añadido

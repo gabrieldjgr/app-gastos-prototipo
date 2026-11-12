@@ -668,6 +668,13 @@ small { font-size: 13px; }
 .proactive-main b { font-weight: 600; }
 .proactive-main small { color: var(--text-2); font-size: 13px; line-height: 18px; }
 .proactive-main .btn-row { margin-top: 8px; }
+.proactive-main b { line-height: 20px; }
+.home-notice { margin: 0 0 16px; }
+.review-top .proactive-card { margin-top: 0; }
+.screen > .proactive-card:first-of-type { margin-top: 0; }
+.rate-stale { text-align: center; font-size: 12px; color: var(--warn-text); background: var(--warn-soft); border-radius: 10px; padding: 6px 10px; margin: -4px auto 0; }
+.rec-badge { font-size: 12px; margin-left: 2px; }
+.dup.unusual { margin-top: 10px; }
 
 /* ---------- v0.2: recortar y tapar ---------- */
 .tip-card { display: flex; align-items: flex-start; gap: 10px; background: var(--accent-soft); color: var(--text); padding: 12px 10px 12px 14px; border-radius: 14px; font-size: 13px; line-height: 18px; margin: 4px 0 12px; }

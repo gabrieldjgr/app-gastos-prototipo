@@ -395,6 +395,7 @@ export async function extractDemo(files, mode, onStep = () => {}, { account = ''
     { fecha: d(2), comercio: 'MP*TIENDITA', descripcion: 'MERCADOPAGO*TIENDITA', monto: m(158), categoria: 'supermercado', confianza: 'baja', pregunta: '¿“MP*TIENDITA” es una compra de súper o de algo para la casa?', opciones: ['supermercado', 'hogar', 'otros'] },
     { fecha: d(3), comercio: 'Starbucks', descripcion: 'STARBUCKS REFORMA', monto: m(118), categoria: 'restaurantes', ...unknown },
     { fecha: d(3), comercio: 'Amazon', descripcion: 'AMZN MKTP MX', monto: m(649), categoria: 'compras', confianza: 'baja', pregunta: '¿Esta compra en Amazon fue para la casa o personal?', opciones: ['hogar', 'compras', 'regalos'] },
+    { fecha: d(3), comercio: 'Liverpool', descripcion: 'LIVERPOOL SANTA FE', monto: m(4890), categoria: 'compras' },
     { fecha: d(4), comercio: 'Depósito nómina', descripcion: 'ABONO NOMINA', monto: m(18500), categoria: 'otros', tipo: 'ingreso', metodo_pago: debit },
     { fecha: d(4), comercio: 'Transferencia a ahorro', descripcion: 'TRASPASO A CTA AHORRO', monto: m(2000), categoria: 'otros', tipo: 'transferencia', metodo_pago: debit },
   ];

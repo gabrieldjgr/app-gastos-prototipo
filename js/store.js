@@ -1,6 +1,6 @@
 // Estado de la app guardado en el propio dispositivo (localStorage).
 import { PREDEFINED_CATEGORIES, DEFAULT_VISIBLE, DASHBOARD_WIDGETS, DEFAULT_METHODS } from './data.js';
-import { setBaseCurrency } from './format.js';
+import { setBaseCurrency, todayISO } from './format.js';
 
 const KEY = 'ritmo.v1';
 const listeners = new Set();
@@ -9,7 +9,7 @@ function defaultState() {
   return {
     version: 1,
     onboarded: false,
-    settings: { currency: 'MXN', theme: 'auto', provider: 'anthropic', keys: {}, models: {}, name: '', rates: {}, cropTipSeen: false },
+    settings: { currency: 'MXN', theme: 'auto', provider: 'anthropic', keys: {}, models: {}, name: '', rates: {}, rateDates: {}, noticeTypes: {}, cropTipSeen: false },
     paymentMethods: DEFAULT_METHODS.map((m) => ({ ...m })),
     visibleCategories: [...DEFAULT_VISIBLE],
     customCategories: [],
@@ -18,6 +18,10 @@ function defaultState() {
     expenses: [],
     dashboard: DASHBOARD_WIDGETS.map((w) => ({ id: w.id, on: true })),
     lastBatchAt: null,
+    notices: {}, // memoria de avisos: { clave: { status, until, ignores, acted } }
+    noticeLog: null, // aviso de inicio mostrado hoy
+    merchantRules: {}, // comercio normalizado → categoría
+    recurring: {}, // comercio normalizado → { name, amount, categoryId, day }
   };
 }
 
@@ -38,6 +42,9 @@ function migrate(s, raw) {
   const st = s.settings;
   if (st.apiKey) { st.keys = { ...st.keys, anthropic: st.apiKey }; delete st.apiKey; }
   if (st.model) { st.models = { ...st.models, anthropic: st.model }; delete st.model; }
+  // v0.3 guardaba las tarjetas ignoradas aparte; ahora viven en la memoria de avisos.
+  for (const d of st.ignoredCards || []) s.notices[`card:${d}`] = { status: 'no' };
+  delete st.ignoredCards;
   if (!raw.paymentMethods) {
     // Los medios usados en gastos antiguos se convierten en medios configurados.
     const used = new Set(s.expenses.map((e) => e.paymentMethod).filter(Boolean));
@@ -68,6 +75,15 @@ export function save() {
   }
   setBaseCurrency(state.settings.currency);
   listeners.forEach((fn) => fn());
+}
+
+// Guarda sin volver a pintar la pantalla (para registros internos hechos durante el pintado).
+export function persist() {
+  try {
+    localStorage.setItem(KEY, JSON.stringify(state));
+  } catch (err) {
+    console.warn('No se pudo guardar', err);
+  }
 }
 
 export function subscribe(fn) {
@@ -130,6 +146,15 @@ export function rateFor(currency) {
   return Number(state.settings.rates[currency]) || 1;
 }
 
+// Guarda la tasa y la fecha en que se actualizó (si cambió).
+export function setRate(currency, rate) {
+  const r = Number(rate) || 1;
+  if (state.settings.rates[currency] !== r || !(state.settings.rateDates || {})[currency]) {
+    state.settings.rateDates = { ...state.settings.rateDates, [currency]: todayISO() };
+  }
+  state.settings.rates[currency] = r;
+}
+
 export function normalizeExpense(e) {
   const rate = e.currency === state.settings.currency ? 1 : Number(e.rate) || rateFor(e.currency);
   return { ...e, rate, amountBase: Math.round(Number(e.amount) * rate * 100) / 100 };
@@ -146,7 +171,7 @@ export function addExpense(data) {
     createdAt: Date.now(),
     ...data,
   });
-  if (e.currency !== state.settings.currency && e.rate) state.settings.rates[e.currency] = e.rate;
+  if (e.currency !== state.settings.currency && e.rate) setRate(e.currency, e.rate);
   state.expenses.push(e);
   save();
   return e;
