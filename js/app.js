@@ -20,6 +20,7 @@ import {
 import { loadSampleData } from './sample.js';
 import {
   hasApiKey, extractWithAI, extractDemo, AiError, PROVIDERS, providerById, currentProvider, currentModel, modelLabel, testConnection,
+  listModels, ensureModel, modelsFor,
 } from './ai.js';
 import { openImageEditor } from './imageeditor.js';
 import {
@@ -1296,7 +1297,8 @@ function openReceipt() {
         },
         uncertain: low ? { categoryId: true } : {},
       });
-      if (mov.pregunta) toast(mov.pregunta);
+      if (result.modelChanged) toast(`Cambié a ${result.modelChanged.to}: “${result.modelChanged.from}” ya no está disponible.`);
+      else if (mov.pregunta) toast(mov.pregunta);
     } catch (err) {
       console.error(err);
       sheet.body.querySelector('.shimmer')?.remove();
@@ -1396,7 +1398,8 @@ function openBatch({ account: preset = '' } = {}) {
       sheet.close();
       view.reviewBase = pending().length;
       switchTab('review');
-      if (result.nota) toast(result.nota);
+      if (result.modelChanged) toast(`Cambié a ${result.modelChanged.to}: “${result.modelChanged.from}” ya no está disponible.`);
+      else if (result.nota) toast(result.nota);
     } catch (err) {
       console.error(err);
       prog.innerHTML = `<p class="error-box">😕 ${esc(err instanceof AiError ? err.message : 'Ocurrió un error inesperado al leer los archivos.')}</p>`;
@@ -1647,7 +1650,7 @@ function openSettings() {
         <button class="set-row" data-act="sample"><span>Cargar datos de ejemplo</span>${icon('chevron')}</button>
         <button class="set-row danger" data-act="wipe"><span>Borrar todo</span>${icon('chevron')}</button>
       </div>
-      <p class="about">${logoSVG(36)}<span><b>Ritmo</b> · prototipo v0.4.0<br><small>Tus datos viven en este dispositivo.</small></span></p>`);
+      <p class="about">${logoSVG(36)}<span><b>Ritmo</b> · prototipo v0.4.1<br><small>Tus datos viven en este dispositivo.</small></span></p>`);
   };
   sheet.el.addEventListener('input', (e) => {
     if (e.target.matches('[data-name]')) { state.settings.name = e.target.value.slice(0, 30); save(); }
@@ -1679,13 +1682,25 @@ function openSettings() {
     }
     if (act === 'model') {
       const p = currentProvider();
-      const v = await pick({ title: `Modelo de ${p.name}`, options: p.models.map((m, i) => ({ value: m.id, label: m.name, hint: i === 0 ? `Recomendado · ${m.note}` : m.note })), selected: currentModel() });
+      // Con clave, se usa la lista real de modelos disponibles (los modelos se retiran con el tiempo).
+      if (hasApiKey(p.id)) {
+        toast('Buscando modelos disponibles…');
+        try { await listModels(p.id); } catch { toast('No pude consultar los modelos; muestro la lista sugerida'); }
+      }
+      const list = modelsFor(p.id);
+      const v = await pick({ title: `Modelo de ${p.name}`, options: list.map((m, i) => ({ value: m.id, label: m.name, hint: i === 0 ? `Recomendado · ${m.note || ''}` : m.note || m.id })), selected: currentModel() });
       if (v) { state.settings.models = { ...state.settings.models, [p.id]: v }; save(); draw(); }
     }
     if (act === 'test') {
       const id = state.settings.provider;
       conn[id] = 'testing'; draw();
-      try { await testConnection(id); conn[id] = true; } catch (err) { conn[id] = err instanceof AiError ? err.message : 'Error'; }
+      try {
+        await testConnection(id);
+        conn[id] = true;
+        // Además de la clave, revisa que el modelo elegido siga existiendo.
+        const changed = await ensureModel(id).catch(() => null);
+        if (changed) toast(`“${changed.from}” ya no está disponible. Cambié a ${changed.to}.`);
+      } catch (err) { conn[id] = err instanceof AiError ? err.message : 'Error'; }
       draw();
     }
     if (act === 'methods') openPaymentMethods(draw);

@@ -3,6 +3,14 @@
 Todos los cambios notables de este proyecto se documentan aquí.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/); versionado según [SemVer](https://semver.org/lang/es/).
 
+## [0.4.1] - 2026-11-12
+
+### Corregido
+- Error "El modelo gemini-2.5-flash no existe o no está disponible". Los modelos fijos en el código pueden ser retirados por el proveedor.
+  - El selector de modelo ahora consulta la lista real de modelos disponibles para tu clave (Claude, Gemini u OpenAI).
+  - "Probar conexión" revisa también que el modelo elegido siga existiendo y, si no, cambia al mejor disponible.
+  - Si una lectura falla porque el modelo ya no existe, la app elige otro, reintenta una vez y te avisa.
+
 ## [0.4.0] - 2026-11-12
 
 ### Añadido

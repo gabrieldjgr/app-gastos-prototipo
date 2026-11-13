@@ -1,6 +1,6 @@
 // Lectura de capturas, recibos y archivos con IA (Claude, Gemini u OpenAI),
 // o resultados de ejemplo en modo demo.
-import { state, allCategories, visibleCategories, paymentMethods } from './store.js';
+import { state, save, allCategories, visibleCategories, paymentMethods } from './store.js';
 import { CURRENCIES } from './data.js';
 import { todayISO, toISO, addDays } from './format.js';
 
@@ -22,6 +22,7 @@ export const PROVIDERS = [
     id: 'google', name: 'Gemini', company: 'Google', keyHint: 'AIza…', keyUrl: 'aistudio.google.com',
     privacy: 'Tiene un nivel gratuito, pero en ese nivel Google puede usar lo que envías para mejorar sus productos. Tapa los datos sensibles antes de enviar.',
     models: [
+      { id: 'gemini-flash-latest', name: 'Gemini Flash (el más reciente)', note: 'Rápido · con nivel gratuito' },
       { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', note: 'Rápido · con nivel gratuito' },
       { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash-Lite', note: 'El más económico' },
       { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', note: 'Mejor lectura, más lento' },
@@ -51,9 +52,14 @@ export function currentModel() {
   return (state.settings.models || {})[p.id] || p.models[0].id;
 }
 
+// Modelos a mostrar: la lista real que devolvió el proveedor (si ya se consultó) o la lista sugerida.
+export function modelsFor(providerId) {
+  const cached = (state.settings.modelLists || {})[providerId];
+  return cached?.models?.length ? cached.models : providerById(providerId).models;
+}
+
 export function modelLabel(providerId, modelId) {
-  const p = providerById(providerId);
-  return p.models.find((m) => m.id === modelId)?.name || modelId;
+  return modelsFor(providerId).find((m) => m.id === modelId)?.name || providerById(providerId).models.find((m) => m.id === modelId)?.name || modelId;
 }
 
 export function hasApiKey(providerId = state.settings.provider) {
@@ -177,6 +183,9 @@ async function spreadsheetToCsv(file) {
 
 export class AiError extends Error {}
 
+// El modelo elegido ya no existe o no está disponible para la clave.
+class ModelGone extends AiError {}
+
 // ---------------------------------------------------------------- Entrada principal
 
 // Envía los archivos a la IA elegida y devuelve { movimientos, nota }.
@@ -191,7 +200,23 @@ export async function extractWithAI(files, mode, onStep = () => {}, { account = 
   onStep(`${files.length > 1 ? `Leyendo ${files.length} archivos` : 'Leyendo'} con ${p.name}…`);
   const req = { system: systemPrompt(mode, account), parts, ask, model: currentModel(), key: apiKey() };
   const run = { anthropic: viaAnthropic, google: viaGemini, openai: viaOpenAI }[p.id];
-  const text = await run(req);
+  let text;
+  let modelChanged = null;
+  try {
+    text = await run(req);
+  } catch (err) {
+    if (!(err instanceof ModelGone)) throw err;
+    // El modelo fue retirado: se busca el mejor disponible para esta clave y se reintenta una vez.
+    onStep(`El modelo ${req.model} ya no está disponible. Buscando otro…`);
+    const models = await listModels(p.id).catch(() => []);
+    const best = models.find((m) => m.id !== req.model);
+    if (!best) throw err;
+    state.settings.models = { ...state.settings.models, [p.id]: best.id };
+    save();
+    modelChanged = { from: req.model, to: best.name };
+    onStep(`Leyendo con ${best.name}…`);
+    text = await run({ ...req, model: best.id });
+  }
   let result;
   try {
     result = JSON.parse(text);
@@ -202,6 +227,7 @@ export async function extractWithAI(files, mode, onStep = () => {}, { account = 
     if (m.metodo_pago === 'ninguno') m.metodo_pago = '';
     m.ultimos_digitos = String(m.ultimos_digitos || '').replace(/\D/g, '').slice(-4);
   }
+  if (modelChanged) result.modelChanged = modelChanged;
   return result;
 }
 
@@ -281,7 +307,7 @@ async function viaGemini({ system, parts, ask, model, key }) {
     const msg = data.error?.message || '';
     if (res.status === 400 && /api key/i.test(msg)) throw new AiError('La clave de Google no es válida. Revísala en Ajustes.');
     if (res.status === 403) throw new AiError('Tu clave de Google no tiene permiso para este modelo.');
-    if (res.status === 404) throw new AiError(`El modelo “${model}” no existe o no está disponible para tu clave.`);
+    if (res.status === 404) throw new ModelGone(`El modelo “${model}” no está disponible para tu clave${msg ? ` (${msg})` : ''}. Elige otro en Ajustes → Modelo.`);
     if (res.status === 429) throw new AiError('Llegaste al límite de uso de Gemini (el nivel gratuito tiene un tope por minuto y por día). Espera un poco.');
     throw new AiError(`Error de Gemini (${res.status})${msg ? `: ${msg}` : ''}`);
   }
@@ -317,7 +343,7 @@ async function viaOpenAI({ system, parts, ask, model, key }) {
     const msg = data.error?.message || '';
     if (res.status === 401) throw new AiError('La clave de OpenAI no es válida. Revísala en Ajustes.');
     if (res.status === 403) throw new AiError('Tu clave de OpenAI no tiene permiso para este modelo.');
-    if (res.status === 404) throw new AiError(`El modelo “${model}” no existe o no está disponible para tu clave.`);
+    if (res.status === 404 || data.error?.code === 'model_not_found') throw new ModelGone(`El modelo “${model}” no está disponible para tu clave. Elige otro en Ajustes → Modelo.`);
     if (res.status === 429) throw new AiError(data.error?.code === 'insufficient_quota' ? 'Tu cuenta de OpenAI no tiene saldo.' : 'Demasiadas solicitudes seguidas. Espera un momento.');
     throw new AiError(`Error de OpenAI (${res.status})${msg ? `: ${msg}` : ''}`);
   }
@@ -326,6 +352,73 @@ async function viaOpenAI({ system, parts, ask, model, key }) {
   if (choice.message?.refusal) throw new AiError('La IA no pudo procesar este contenido.');
   if (choice.finish_reason === 'length') throw tooMany();
   return choice.message?.content || '';
+}
+
+// ---------------------------------------------------------------- Modelos disponibles
+
+const SKIP_GEMINI = /embedding|tts|image|live|audio|native|computer|robotics|learnlm|gemma|aqa|exp-|veo|imagen|nano-banana/;
+const SKIP_OPENAI = /audio|realtime|tts|transcribe|search|image|instruct|codex|chat-latest|-\d{4}-\d{2}-\d{2}|oss|preview/;
+
+function geminiNote(id) {
+  if (/lite/.test(id)) return 'El más económico';
+  if (/pro/.test(id)) return 'Mejor lectura, más lento';
+  return 'Rápido · recomendado';
+}
+
+// Pide al proveedor la lista real de modelos que acepta esta clave, ordenada de mejor a peor para leer movimientos.
+export async function listModels(providerId) {
+  const key = ((state.settings.keys || {})[providerId] || '').trim();
+  if (!key) return [];
+  let models = [];
+  if (providerId === 'google') {
+    const res = await safeFetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', { headers: { 'x-goog-api-key': key } });
+    if (!res.ok) throw new AiError(`Error ${res.status}`);
+    const data = await res.json();
+    models = (data.models || [])
+      .filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
+      .map((m) => ({ id: m.name.replace(/^models\//, ''), name: m.displayName || m.name }))
+      .filter((m) => m.id.startsWith('gemini') && !SKIP_GEMINI.test(m.id))
+      .map((m) => {
+        const ver = parseFloat((m.id.match(/gemini-(\d+(?:\.\d+)?)/) || [])[1] || '0');
+        const kind = /lite/.test(m.id) ? 200 : /flash/.test(m.id) ? 300 : /pro/.test(m.id) ? 150 : 100;
+        const alias = m.id === 'gemini-flash-latest' ? 2000 : /latest/.test(m.id) ? 500 : 0;
+        const unstable = /preview|exp/.test(m.id) ? 100 : 0;
+        return { ...m, note: geminiNote(m.id), score: alias + kind + ver * 10 - unstable };
+      });
+  } else if (providerId === 'openai') {
+    const res = await safeFetch('https://api.openai.com/v1/models', { headers: { Authorization: `Bearer ${key}` } });
+    if (!res.ok) throw new AiError(`Error ${res.status}`);
+    const data = await res.json();
+    models = (data.data || [])
+      .filter((m) => /^gpt-\d/.test(m.id) && !SKIP_OPENAI.test(m.id))
+      .map((m) => {
+        const ver = parseFloat((m.id.match(/^gpt-(\d+(?:\.\d+)?)/) || [])[1] || '0');
+        const size = /nano/.test(m.id) ? 0 : /mini/.test(m.id) ? 1 : 2;
+        const name = m.id.replace(/^gpt-/, 'GPT-').replace(/-mini/, ' mini').replace(/-nano/, ' nano');
+        return { id: m.id, name, note: size === 2 ? 'La mejor lectura' : size === 1 ? 'Rápido y económico' : 'El más económico', score: ver * 10 + size };
+      });
+  } else {
+    const { default: Anthropic } = await import(ANTHROPIC_SDK_URL);
+    const client = new Anthropic({ apiKey: key, dangerouslyAllowBrowser: true });
+    const page = await client.models.list({ limit: 50 });
+    models = (page.data || []).map((m, i) => ({ id: m.id, name: m.display_name || m.id, note: /haiku/.test(m.id) ? 'El más económico' : /sonnet/.test(m.id) ? 'Rápido y más económico' : 'La mejor lectura', score: 1000 - i + (/opus/.test(m.id) ? 50 : 0) }));
+  }
+  models.sort((a, b) => b.score - a.score);
+  const clean = models.map(({ score, ...m }) => m);
+  state.settings.modelLists = { ...state.settings.modelLists, [providerId]: { at: Date.now(), models: clean } };
+  save();
+  return clean;
+}
+
+// Revisa que el modelo elegido siga disponible; si no, elige el mejor. Devuelve { from, to } si cambió.
+export async function ensureModel(providerId) {
+  const models = await listModels(providerId);
+  if (!models.length) return null;
+  const current = (state.settings.models || {})[providerId] || providerById(providerId).models[0].id;
+  if (models.some((m) => m.id === current)) return null;
+  state.settings.models = { ...state.settings.models, [providerId]: models[0].id };
+  save();
+  return { from: current, to: models[0].name };
 }
 
 // ---------------------------------------------------------------- Probar conexión
