@@ -204,7 +204,7 @@ const RETRY_WAITS_MS = [3000, 8000];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const busyMessage = (name) => `Los servidores de ${name} están saturados en este momento. No es un problema de tu clave: intenta en unos minutos o elige otro modelo en Ajustes → Modelo.`;
-const timeoutMessage = () => `La IA tardó demasiado en responder (más de ${AI_TIMEOUT_MS / 1000} s). Intenta de nuevo; si pasa seguido, sube menos archivos a la vez o elige otro modelo.`;
+const timeoutMessage = (ms = AI_TIMEOUT_MS) => `La IA tardó demasiado en responder (más de ${ms / 1000} s). Intenta de nuevo; si pasa seguido, sube menos archivos a la vez o elige otro modelo.`;
 
 // Reintenta solo las saturaciones (no los tiempos agotados, que ya costaron 90 s).
 async function runWithRetry(run, req, onStep, name) {
@@ -276,21 +276,24 @@ async function extractInner(files, mode, onStep, { account = '' } = {}) {
     text = await runWithRetry(run, req, onStep, p.name);
   } catch (err) {
     const gone = err instanceof ModelGone;
-    // Tras un tiempo agotado no se prueba otro modelo: serían otros 90 s de espera.
-    if (!gone && !(err instanceof Busy && !err.timeout) && !(err instanceof Quota)) throw err;
-    // Modelo retirado o saturado: se prueba una vez con otro modelo disponible para esta clave.
-    onStep(gone ? `El modelo ${req.model} ya no está disponible. Buscando otro…` : err instanceof Quota ? `Se agotó el cupo de ${req.model}. Probando con otro modelo…` : `${p.name} sigue sin responder. Probando con otro modelo…`);
+    if (!gone && !(err instanceof Busy) && !(err instanceof Quota)) throw err;
+    const timedOut = err instanceof Busy && err.timeout;
+    // Modelo retirado, saturado, sin cupo o sin respuesta: se prueba una vez con otro modelo de esta clave.
+    onStep(gone ? `El modelo ${req.model} ya no está disponible. Buscando otro…`
+      : err instanceof Quota ? `Se agotó el cupo de ${req.model}. Probando con otro modelo…`
+        : timedOut ? `${req.model} no respondió a tiempo. Probando con un modelo más ligero…`
+          : `${p.name} sigue sin responder. Probando con otro modelo…`);
     const models = await listModels(p.id).catch(() => []);
     const others = models.filter((m) => m.id !== req.model);
-    // Ante saturación se prefiere un modelo que no sea "pro" (tienen límites más bajos).
-    const best = gone ? others[0] : (others.find((m) => !/pro/.test(m.id)) || others[0]);
+    // Si el problema es del modelo (no fue retirado), se prefiere uno ligero: responde rápido y tiene más cupo.
+    const best = gone ? others[0] : (others.find((m) => /lite|mini|haiku/.test(m.id)) || others.find((m) => !/pro/.test(m.id)) || others[0]);
     if (!best) throw err;
     if (gone) {
       // Retirado: el cambio queda guardado. Saturado: solo por esta vez.
       state.settings.models = { ...state.settings.models, [p.id]: best.id };
       save();
     }
-    modelChanged = { from: req.model, to: best.name, reason: gone ? 'gone' : err instanceof Quota ? 'quota' : 'busy' };
+    modelChanged = { from: req.model, to: best.name, toId: best.id, reason: gone ? 'gone' : err instanceof Quota ? 'quota' : timedOut ? 'timeout' : 'busy' };
     onStep(`Leyendo con ${best.name}…`);
     try {
       text = await run({ ...req, model: best.id });
@@ -315,10 +318,10 @@ async function extractInner(files, mode, onStep, { account = '' } = {}) {
 
 // ---------------------------------------------------------------- Claude (SDK oficial)
 
-async function viaAnthropic({ system, parts, ask, model, key }) {
+async function viaAnthropic({ system, parts, ask, model, key, timeoutMs = AI_TIMEOUT_MS }) {
   const { default: Anthropic } = await import(ANTHROPIC_SDK_URL);
   // Los reintentos los maneja runWithRetry, para mostrar el avance en pantalla.
-  const client = new Anthropic({ apiKey: key, dangerouslyAllowBrowser: true, timeout: AI_TIMEOUT_MS, maxRetries: 0 });
+  const client = new Anthropic({ apiKey: key, dangerouslyAllowBrowser: true, timeout: timeoutMs, maxRetries: 0 });
   const content = parts.map((x) => (x.kind === 'image'
     ? { type: 'image', source: { type: 'base64', media_type: x.mime, data: x.data } }
     : x.kind === 'pdf'
@@ -348,7 +351,7 @@ async function viaAnthropic({ system, parts, ask, model, key }) {
     if (err instanceof Anthropic.PermissionDeniedError) throw new AiError('Tu clave no tiene permiso para este modelo.');
     if (err instanceof Anthropic.RateLimitError) throw new AiError('Demasiadas solicitudes seguidas. Espera un momento y vuelve a intentar.');
     if (err instanceof Anthropic.BadRequestError) throw new AiError(`La solicitud no fue aceptada: ${err.message}`);
-    if (err instanceof Anthropic.APIConnectionTimeoutError) throw new Busy(timeoutMessage(), { timeout: true });
+    if (err instanceof Anthropic.APIConnectionTimeoutError) throw new Busy(timeoutMessage(timeoutMs), { timeout: true });
     if (err instanceof Anthropic.APIConnectionError) throw new AiError('Sin conexión con el servicio de IA.');
     if (err instanceof Anthropic.APIError && err.status >= 500) throw new Busy(busyMessage('Claude'));
     if (err instanceof Anthropic.APIError) throw new AiError(`Error del servicio de IA (${err.status ?? 'sin código'}).`);
@@ -375,7 +378,8 @@ function geminiSchema(node) {
   return out;
 }
 
-async function viaGemini({ system, parts, ask, model, key }) {
+// thinkingBudget (opcional) limita el razonamiento previo del modelo; solo lo usa el diagnóstico por ahora.
+async function viaGemini({ system, parts, ask, model, key, timeoutMs = AI_TIMEOUT_MS, thinkingBudget }) {
   const body = {
     systemInstruction: { parts: [{ text: system }] },
     contents: [{
@@ -384,11 +388,12 @@ async function viaGemini({ system, parts, ask, model, key }) {
     }],
     generationConfig: { responseMimeType: 'application/json', responseSchema: geminiSchema(schema()), maxOutputTokens: 16000 },
   };
+  if (thinkingBudget != null) body.generationConfig.thinkingConfig = { thinkingBudget };
   const res = await safeFetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
     body: JSON.stringify(body),
-  }, AI_TIMEOUT_MS);
+  }, timeoutMs);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const msg = data.error?.message || '';
@@ -409,7 +414,7 @@ async function viaGemini({ system, parts, ask, model, key }) {
 
 // ---------------------------------------------------------------- OpenAI (REST)
 
-async function viaOpenAI({ system, parts, ask, model, key }) {
+async function viaOpenAI({ system, parts, ask, model, key, timeoutMs = AI_TIMEOUT_MS }) {
   const content = parts.map((x) => (x.kind === 'image'
     ? { type: 'image_url', image_url: { url: `data:${x.mime};base64,${x.data}` } }
     : x.kind === 'pdf'
@@ -425,7 +430,7 @@ async function viaOpenAI({ system, parts, ask, model, key }) {
       response_format: { type: 'json_schema', json_schema: { name: 'movimientos', strict: true, schema: schema() } },
       max_completion_tokens: 16000,
     }),
-  }, AI_TIMEOUT_MS);
+  }, timeoutMs);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const msg = data.error?.message || '';
@@ -528,13 +533,16 @@ function testImage() {
   return c.toDataURL('image/jpeg', 0.85).split(',')[1];
 }
 
+// Tiempo límite de cada prueba del diagnóstico: una lectura mínima debería tardar pocos segundos.
+const DIAG_TIMEOUT_MS = 30000;
+
 // Corre pruebas con datos inventados y avisa el avance con onUpdate(steps).
-// Cada paso: { label, state: 'run' | 'ok' | 'fail', detail, ms }.
+// Cada paso: { label, state: 'run' | 'ok' | 'fail', detail, ms, useModel? }.
 export async function runDiagnostic(onUpdate = () => {}) {
   const p = currentProvider();
   const model = currentModel();
   const steps = [];
-  const step = async (label, fn) => {
+  const step = async (label, fn, extra = {}) => {
     const s = { label, state: 'run', detail: '' };
     steps.push(s);
     onUpdate(steps);
@@ -543,6 +551,7 @@ export async function runDiagnostic(onUpdate = () => {}) {
     try {
       s.detail = (await fn()) || '';
       s.state = 'ok';
+      Object.assign(s, extra);
     } catch (err) {
       s.state = 'fail';
       s.detail = describeError(err);
@@ -563,19 +572,27 @@ export async function runDiagnostic(onUpdate = () => {}) {
     return `${models.length} modelos disponibles; “${model}” está entre ellos`;
   });
   const run = { anthropic: viaAnthropic, google: viaGemini, openai: viaOpenAI }[p.id];
-  const base = { system: systemPrompt('batch', ''), key: apiKey() };
-  const read = async (m, parts, ask) => {
-    const r = JSON.parse(await run({ ...base, model: m, parts, ask }));
+  const base = { system: systemPrompt('batch', ''), key: apiKey(), timeoutMs: DIAG_TIMEOUT_MS };
+  const read = async (m, parts, ask, more = {}) => {
+    const r = JSON.parse(await run({ ...base, model: m, parts, ask, ...more }));
     const first = (r.movimientos || [])[0];
     return `Leyó ${(r.movimientos || []).length} movimiento(s)${first ? `: ${first.comercio} ${first.monto} ${first.moneda}` : ''}`;
   };
   const textPart = [{ kind: 'text', text: 'Archivo prueba.csv:\nFecha,Comercio,Monto\n2026-11-01,OXXO,50.00' }];
   const imgPart = [{ kind: 'image', mime: 'image/jpeg', data: testImage() }];
-  const okText = await step(`Lectura de texto con ${model}`, () => read(model, textPart, 'Lee todos los movimientos de este archivo.'));
-  const okImg = await step(`Lectura de imagen con ${model}`, () => read(model, imgPart, 'Lee este recibo.'));
+  const textAsk = 'Lee todos los movimientos de este archivo.';
+  const okText = await step(`Lectura de texto con ${model}`, () => read(model, textPart, textAsk));
+  const textTimedOut = !okText && /tardó demasiado/.test(steps[steps.length - 1].detail);
+  // Si ni el texto respondió a tiempo, la imagen tampoco lo hará: se omite para no esperar otros 30 s.
+  const okImg = textTimedOut ? false : await step(`Lectura de imagen con ${model}`, () => read(model, imgPart, 'Lee este recibo.'));
+  if (textTimedOut && p.id === 'google') {
+    // ¿Es el razonamiento previo del modelo lo que lo hace tardar? Misma lectura con razonamiento limitado.
+    await step(`Lectura de texto con ${model} y razonamiento limitado`, () => read(model, textPart, textAsk, { thinkingBudget: 512 }));
+  }
   if (!okText || !okImg) {
-    const alt = models.find((m) => m.id !== model && !/pro/.test(m.id));
-    if (alt) await step(`Lectura de imagen con ${alt.id} (otro modelo)`, () => read(alt.id, imgPart, 'Lee este recibo.'));
+    const others = models.filter((m) => m.id !== model);
+    const alt = others.find((m) => /lite|mini|haiku/.test(m.id)) || others.find((m) => !/pro/.test(m.id));
+    if (alt) await step(`Lectura de imagen con ${alt.id} (otro modelo)`, () => read(alt.id, imgPart, 'Lee este recibo.'), { useModel: alt.id });
   }
   return steps;
 }
@@ -632,7 +649,7 @@ async function safeFetch(url, opts, timeoutMs = 0) {
   } catch (err) {
     if (ctrl.signal.aborted) {
       lastHttp = { status: 'sin respuesta', body: `Se canceló a los ${timeoutMs / 1000} s` };
-      throw new Busy(timeoutMessage(), { timeout: true });
+      throw new Busy(timeoutMessage(timeoutMs), { timeout: true });
     }
     lastHttp = { status: 'red', body: String(err?.message || err) };
     throw new AiError('Sin conexión con el servicio de IA.');

@@ -1,1 +1,1 @@
-{"version":"0.5.2","date":"2026-11-12","notes":["Nuevo Diagnóstico de IA en Ajustes: prueba tu proveedor con datos inventados y muestra la respuesta exacta","Si se agota el cupo de un modelo, la app prueba con otro"]}
+{"version":"0.5.3","date":"2026-11-12","notes":["Si un modelo no responde a tiempo, la app lee con uno más ligero","Diagnóstico más rápido, con botón para cambiar al modelo que sí funciona"]}

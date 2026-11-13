@@ -1863,6 +1863,7 @@ function openCustomize() {
 
 // Aviso cuando la lectura usó otro modelo: permanente si el anterior fue retirado, solo esta vez si estaba saturado.
 function modelChangedMsg(c) {
+  if (c.reason === 'timeout') return `“${c.from}” no respondió a tiempo: esta vez leí con ${c.to}. Puedes dejarlo fijo en Ajustes → Modelo.`;
   if (c.reason === 'quota') return `Se agotó el cupo de “${c.from}”: esta vez leí con ${c.to}.`;
   return c.reason === 'busy'
     ? `“${c.from}” estaba saturado: esta vez leí con ${c.to}.`
@@ -1892,7 +1893,9 @@ function openAiDiagnostic() {
     <h3 class="group-title">Pruebas</h3>
     <div class="card diag-list">${steps.length ? steps.map((s) => `
       <div class="diag-item ${s.state}"><span class="diag-mark">${mark(s.state)}</span><b>${esc(s.label)}</b><small>${secs(s.ms)}</small>
-        ${s.detail ? `<pre class="diag-detail">${esc(s.detail)}</pre>` : ''}</div>`).join('') : '<p class="hint diag-empty">Toca "Probar" para empezar.</p>'}</div>
+        ${s.detail ? `<pre class="diag-detail">${esc(s.detail)}</pre>` : ''}
+        ${s.useModel && s.useModel !== currentModel() ? `<button class="btn primary sm diag-use" data-d="use" data-model="${esc(s.useModel)}">Usar ${esc(s.useModel)} desde ahora</button>` : ''}
+        ${s.useModel && s.useModel === currentModel() ? '<p class="hint diag-use">✓ Es tu modelo ahora</p>' : ''}</div>`).join('') : '<p class="hint diag-empty">Toca "Probar" para empezar.</p>'}</div>
     <h3 class="group-title">Últimas lecturas reales</h3>
     <div class="card diag-list">${log().length ? log().map((l) => `
       <div class="diag-item ${l.ok ? 'ok' : 'fail'}"><span class="diag-mark">${l.ok ? '✅' : '❌'}</span><b>${esc(when(l.at))} · ${esc(l.model)}</b><small>${secs(l.ms)}</small>
@@ -1914,6 +1917,13 @@ function openAiDiagnostic() {
   sheet.el.addEventListener('click', async (e) => {
     const d = e.target.closest('[data-d]')?.dataset.d;
     if (d === 'run' && !running) start();
+    if (d === 'use') {
+      const id = e.target.closest('[data-model]').dataset.model;
+      state.settings.models = { ...state.settings.models, [p.id]: id };
+      save();
+      toast(`Listo: ahora lees con ${id}`);
+      draw();
+    }
     if (d === 'copy') {
       try { await navigator.clipboard.writeText(report()); toast('Resultado copiado'); } catch { toast('No pude copiar; toma una captura de pantalla'); }
     }

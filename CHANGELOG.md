@@ -3,6 +3,20 @@
 Todos los cambios notables de este proyecto se documentan aquí.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/); versionado según [SemVer](https://semver.org/lang/es/).
 
+## [0.5.3] - 2026-11-12
+
+### Corregido
+- Con algunas claves, `gemini-flash-latest` no responde ni a una lectura mínima, mientras que `gemini-flash-lite-latest` responde en menos de 2 segundos. Lo detectó el diagnóstico.
+  - Si un modelo no responde en 90 segundos, la app lee esa vez con un modelo ligero (Flash-Lite, mini o Haiku) y te avisa.
+  - Ante saturación o falta de cupo también se prefiere un modelo ligero.
+
+### Cambiado
+- Diagnóstico de IA:
+  - Cada prueba espera como máximo 30 segundos (antes 90).
+  - Si la lectura de texto no responde, se omite la de imagen con ese mismo modelo.
+  - Con Gemini, se prueba la misma lectura con razonamiento limitado, para saber si el razonamiento es la causa de la demora.
+  - Si otro modelo funciona, aparece el botón "Usar … desde ahora".
+
 ## [0.5.2] - 2026-11-12
 
 ### Añadido

@@ -1,5 +1,5 @@
 // Versión de la app. Al publicar una versión nueva, actualizar aquí, en version.json y en sw.js.
-export const APP_VERSION = '0.5.2';
+export const APP_VERSION = '0.5.3';
 
 // Archivos propios que se refrescan al actualizar.
 export const APP_FILES = [
