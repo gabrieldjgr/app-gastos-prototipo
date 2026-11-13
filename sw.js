@@ -1,9 +1,9 @@
 // Service worker: la app funciona sin conexión (excepto la lectura con IA).
-const VERSION = 'ritmo-v0.4.1';
+const VERSION = 'ritmo-v0.5.0';
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/styles.css',
   './js/app.js', './js/store.js', './js/data.js', './js/format.js', './js/budget.js',
-  './js/charts.js', './js/ui.js', './js/sample.js', './js/ai.js', './js/imageeditor.js', './js/proactive.js',
+  './js/charts.js', './js/ui.js', './js/sample.js', './js/ai.js', './js/imageeditor.js', './js/proactive.js', './js/version.js',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png',
 ];
 
@@ -22,12 +22,14 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
+  if (url.pathname.endsWith('/version.json')) return; // siempre directo a la red
   if (url.hostname === 'api.anthropic.com') return; // nunca se guarda en caché
 
   // Archivos propios: red primero (para ver cambios), caché si no hay conexión.
   if (url.origin === self.location.origin) {
     event.respondWith(
-      fetch(request).then((res) => {
+      // no-cache: revalida con el servidor para no quedarse con archivos viejos del caché HTTP.
+      fetch(request.mode === 'navigate' ? request.url : request, { cache: 'no-cache' }).then((res) => {
         const copy = res.clone();
         caches.open(VERSION).then((c) => c.put(request, copy));
         return res;

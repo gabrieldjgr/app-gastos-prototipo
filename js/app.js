@@ -23,6 +23,7 @@ import {
   listModels, ensureModel, modelsFor,
 } from './ai.js';
 import { openImageEditor } from './imageeditor.js';
+import { APP_VERSION, APP_FILES } from './version.js';
 import {
   NOTICE_TYPES, homeCandidates, pickHomeNotice, allowed, resolveNotice, resetNotices, typeEnabled,
   merchantCandidates, ruleFor, normMerchant, unusualInfo, staleRate, isRecurring, recurringCandidates,
@@ -58,6 +59,8 @@ function boot() {
   subscribe(() => { if (state.onboarded && document.getElementById('screen')) rerender(); });
   document.addEventListener('click', onClick);
   document.addEventListener('keydown', onKey);
+  setupBackGuard();
+  setTimeout(autoCheckUpdate, 3000);
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
@@ -190,7 +193,7 @@ function renderHome() {
   const name = state.settings.name ? `, ${esc(state.settings.name)}` : '';
   let html = topbar(`Hola${name} 👋`, {
     overline: monthName(today),
-    action: `<button class="icon-btn" data-action="settings" aria-label="Ajustes">${icon('gear')}</button>`,
+    action: `<button class="icon-btn ${view.update ? 'has-dot' : ''}" data-action="settings" aria-label="Ajustes${view.update ? ' · hay una versión nueva' : ''}">${icon('gear')}</button>`,
   });
   if (pend > 0) html += `<button class="notice accent" data-action="tab" data-tab="review"><span>📥</span><span><b>${pend} ${pend === 1 ? 'movimiento' : 'movimientos'}</b> por revisar</span>${icon('chevron')}</button>`;
   html += homeNoticeHTML();
@@ -1615,6 +1618,7 @@ function openSettings() {
         <button class="set-row" data-act="currency"><span>Moneda principal</span><b>${s.currency}</b>${icon('chevron')}</button>
         <div class="set-row"><span>Tema</span><div class="seg small">${[['auto', 'Auto'], ['light', 'Claro'], ['dark', 'Oscuro']].map(([v, l]) => `<button class="${s.theme === v ? 'on' : ''}" data-theme-set="${v}">${l}</button>`).join('')}</div></div>
         <label class="set-row"><span>Tu nombre</span><input class="inline-input" data-name value="${esc(s.name)}" placeholder="Opcional"></label>
+        <label class="set-row"><span class="grow">Confirmar al salir<small>Con el gesto atrás, pide hacerlo dos veces para cerrar la app</small></span><input type="checkbox" class="switch" data-confirm-exit ${s.confirmExit !== false ? 'checked' : ''}></label>
       </div>
       <h3 class="group-title">Inteligencia artificial</h3>
       <div class="card list-card">
@@ -1650,10 +1654,14 @@ function openSettings() {
         <button class="set-row" data-act="sample"><span>Cargar datos de ejemplo</span>${icon('chevron')}</button>
         <button class="set-row danger" data-act="wipe"><span>Borrar todo</span>${icon('chevron')}</button>
       </div>
-      <p class="about">${logoSVG(36)}<span><b>Ritmo</b> · prototipo v0.4.1<br><small>Tus datos viven en este dispositivo.</small></span></p>`);
+      <div class="about-block">
+        <p class="about">${logoSVG(36)}<span><b>Ritmo</b> · prototipo v${APP_VERSION}<br><small>Tus datos viven en este dispositivo.</small></span></p>
+        <div id="update-box">${updateBoxHTML()}</div>
+      </div>`);
   };
   sheet.el.addEventListener('input', (e) => {
     if (e.target.matches('[data-name]')) { state.settings.name = e.target.value.slice(0, 30); save(); }
+    if (e.target.matches('[data-confirm-exit]')) { state.settings.confirmExit = e.target.checked; save(); }
     if (e.target.matches('[data-key-input]')) {
       const id = state.settings.provider;
       state.settings.keys = { ...state.settings.keys, [id]: e.target.value.trim() };
@@ -1671,6 +1679,13 @@ function openSettings() {
     const act = e.target.closest('[data-act]')?.dataset.act;
     if (!act) return;
     if (act === 'toggle-key') { showKey = !showKey; draw(); }
+    if (act === 'check-update') {
+      view.updateState = 'checking';
+      sheet.body.querySelector('#update-box').innerHTML = updateBoxHTML();
+      await checkForUpdate();
+      sheet.body.querySelector('#update-box').innerHTML = updateBoxHTML();
+    }
+    if (act === 'apply-update') applyUpdate();
     if (act === 'currency') {
       const v = await pick({ title: 'Moneda principal', options: CURRENCIES.map((c) => ({ value: c.code, label: `${c.code} · ${c.name}` })), selected: state.settings.currency });
       if (v && v !== state.settings.currency) {
@@ -1842,6 +1857,105 @@ function openCustomize() {
     save();
   });
   draw();
+}
+
+// ---------------------------------------------------------------- Actualizaciones
+
+// Compara versiones tipo 0.4.1: devuelve >0 si a es más nueva que b.
+function compareVersions(a, b) {
+  const pa = String(a).split('.').map(Number);
+  const pb = String(b).split('.').map(Number);
+  for (let i = 0; i < 3; i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+  return 0;
+}
+
+// Consulta version.json en el servidor (sin caché). Deja el resultado en view.update / view.updateState.
+async function checkForUpdate() {
+  try {
+    const res = await fetch(`./version.json?t=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) throw new Error(res.status);
+    const info = await res.json();
+    try { localStorage.setItem('ritmo.updateCheck', todayISO()); } catch { /* sin almacenamiento */ }
+    if (compareVersions(info.version, APP_VERSION) > 0) { view.update = info; view.updateState = 'available'; } else { view.update = null; view.updateState = 'latest'; }
+  } catch {
+    view.updateState = 'offline';
+  }
+  return view.update;
+}
+
+// Revisión silenciosa al abrir la app, una vez al día: si hay versión nueva, aparece un punto en el engrane.
+async function autoCheckUpdate() {
+  let last = null;
+  try { last = localStorage.getItem('ritmo.updateCheck'); } catch { /* sin almacenamiento */ }
+  if (last === todayISO() || !navigator.onLine) return;
+  if (await checkForUpdate()) rerender();
+}
+
+function updateBoxHTML() {
+  const st = view.updateState;
+  if (st === 'checking') return '<p class="update-line"><span class="spinner"></span> Buscando actualizaciones…</p>';
+  if (st === 'available' && view.update) {
+    const u = view.update;
+    return `<div class="update-card"><b>Hay una versión nueva: v${esc(u.version)}</b>
+      ${u.notes?.length ? `<ul>${u.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
+      <button class="btn primary full" data-act="apply-update">Actualizar ahora</button>
+      <small>Tus gastos y ajustes se conservan.</small></div>`;
+  }
+  const msg = st === 'latest' ? '<p class="update-line ok">✓ Tienes la última versión</p>' : st === 'offline' ? '<p class="update-line warn">Sin conexión: no pude revisar. Intenta más tarde.</p>' : '';
+  return `${msg}<button class="btn ghost full" data-act="check-update">Buscar actualizaciones</button>`;
+}
+
+// Descarga de nuevo los archivos de la app (saltando cachés) y recarga. Los datos en localStorage no se tocan.
+async function applyUpdate() {
+  toast('Actualizando…');
+  await Promise.all(APP_FILES.map((f) => fetch(f, { cache: 'reload' }).catch(() => null)));
+  try {
+    for (const k of await caches.keys()) await caches.delete(k);
+    for (const r of (await navigator.serviceWorker?.getRegistrations()) || []) await r.unregister();
+  } catch { /* sin service worker */ }
+  allowLeave = true;
+  location.reload();
+}
+
+// ---------------------------------------------------------------- Gesto atrás
+
+// En Android, el gesto atrás de una PWA instalada cierra la app. Se intercepta con el historial:
+// primero cierra la ventana abierta, luego vuelve a Inicio y, en Inicio, pide repetir el gesto para salir.
+let allowLeave = false;
+let lastBackAt = 0;
+let guardArmed = false;
+
+function armGuard() {
+  if (guardArmed || allowLeave) return;
+  history.pushState({ ritmo: 'guard' }, '');
+  guardArmed = true;
+}
+
+function setupBackGuard() {
+  history.replaceState({ ritmo: 'root' }, '');
+  // Chrome ignora entradas del historial creadas sin interacción: se arma tras el primer toque.
+  const arm = () => armGuard();
+  window.addEventListener('pointerdown', arm, { capture: true });
+  window.addEventListener('keydown', arm, { capture: true });
+  window.addEventListener('popstate', () => {
+    guardArmed = false;
+    if (allowLeave) return;
+    if (document.querySelector('.img-editor')) {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      armGuard();
+      return;
+    }
+    if (closeTopSheet()) { armGuard(); return; }
+    if (state.onboarded && view.tab !== 'home') { switchTab('home'); armGuard(); return; }
+    if (state.settings.confirmExit === false || Date.now() - lastBackAt < 2500) {
+      allowLeave = true;
+      history.back();
+      return;
+    }
+    lastBackAt = Date.now();
+    toast('Haz el gesto atrás otra vez para salir');
+    armGuard();
+  });
 }
 
 // ---------------------------------------------------------------- Eventos globales

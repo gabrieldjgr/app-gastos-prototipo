@@ -267,7 +267,7 @@ export function openImageEditor(original, { edits = null, index = 0, total = 1 }
     });
 
     const onKey = (e) => {
-      if (e.key === 'Escape') { e.stopPropagation(); finish(null); }
+      if (e.key === 'Escape') { e.stopImmediatePropagation(); finish(null); }
       if ((e.key === 'Delete' || e.key === 'Backspace') && mode === 'redact' && selected >= 0) { snapshot(); boxes.splice(selected, 1); selected = -1; draw(); }
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && history.length) { ({ crop, boxes } = JSON.parse(history.pop())); draw(); }
     };

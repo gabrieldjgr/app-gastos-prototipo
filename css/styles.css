@@ -633,6 +633,18 @@ small { font-size: 13px; }
 .swatch.on { box-shadow: 0 0 0 2px var(--text); transform: scale(1.1); }
 .about { display: flex; align-items: center; gap: 12px; justify-content: center; color: var(--text-2); font-size: 13px; line-height: 18px; margin: 28px 0 8px; }
 .about b { color: var(--text); }
+.about-block { margin: 28px 0 8px; display: flex; flex-direction: column; gap: 10px; }
+.about-block .about { margin: 0; }
+.update-line { text-align: center; font-size: 13px; color: var(--text-2); display: flex; align-items: center; justify-content: center; gap: 8px; }
+.update-line.ok { color: var(--ok); font-weight: 500; }
+.update-line.warn { color: var(--warn-text); }
+.update-card { background: var(--accent-soft); border-radius: 20px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.update-card b { color: var(--accent-text); }
+.update-card ul { margin: 0; padding-left: 18px; font-size: 13px; line-height: 19px; color: var(--text); }
+.update-card small { text-align: center; color: var(--text-2); font-size: 12px; }
+.spinner { width: 14px; height: 14px; border-radius: 999px; border: 2px solid var(--accent); border-right-color: transparent; animation: spin .8s linear infinite; display: inline-block; }
+.icon-btn.has-dot { position: relative; }
+.icon-btn.has-dot::after { content: ''; position: absolute; top: 6px; right: 6px; width: 9px; height: 9px; border-radius: 999px; background: var(--over); box-shadow: 0 0 0 2px var(--bg); }
 
 /* ---------- v0.2: proveedores de IA ---------- */
 .provider-seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 3px; background: var(--sunken); border-radius: 14px; }

@@ -3,6 +3,22 @@
 Todos los cambios notables de este proyecto se documentan aquí.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/); versionado según [SemVer](https://semver.org/lang/es/).
 
+## [0.5.0] - 2026-11-12
+
+### Añadido
+- **Buscar actualizaciones** en Ajustes, junto a la versión.
+  - Muestra si tienes la última versión o si hay una nueva, con sus novedades.
+  - "Actualizar ahora" descarga los archivos nuevos sin tocar tus datos.
+  - Al abrir la app se revisa en silencio una vez al día; si hay versión nueva, aparece un punto en el engrane.
+- **Gesto atrás en Android**:
+  - primero cierra la ventana o el editor abierto;
+  - luego vuelve a Inicio;
+  - en Inicio pide hacer el gesto otra vez para salir;
+  - se puede desactivar en Ajustes → Confirmar al salir.
+
+### Cambiado
+- El service worker revalida los archivos con el servidor. Ya no hace falta recargar varias veces para ver una versión nueva.
+
 ## [0.4.1] - 2026-11-12
 
 ### Corregido
