@@ -22,6 +22,7 @@ function defaultState() {
     noticeLog: null, // aviso de inicio mostrado hoy
     merchantRules: {}, // comercio normalizado → categoría
     recurring: {}, // comercio normalizado → { name, amount, categoryId, day }
+    backup: { auto: true, lastFileDay: null, lastHash: null, lastSent: null }, // respaldo diario y último envío
   };
 }
 
@@ -95,6 +96,12 @@ export function replaceState(next) {
   for (const k of Object.keys(state)) delete state[k];
   Object.assign(state, next);
   save();
+}
+
+// Carga datos de un respaldo como si vinieran del almacenamiento (con valores por defecto y migraciones).
+export function restoreState(parsed) {
+  const base = defaultState();
+  replaceState(migrate({ ...base, ...parsed, settings: { ...base.settings, ...(parsed.settings || {}) } }, parsed));
 }
 
 export function resetAll() {

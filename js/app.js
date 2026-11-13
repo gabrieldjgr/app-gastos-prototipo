@@ -24,6 +24,7 @@ import {
 } from './ai.js';
 import { openImageEditor } from './imageeditor.js';
 import { APP_VERSION, APP_FILES } from './version.js';
+import { backupMeta, downloadBackup, dailyBackupIfDue, shareBackup, readBackup, applyBackup } from './backup.js';
 import {
   NOTICE_TYPES, homeCandidates, pickHomeNotice, allowed, resolveNotice, resetNotices, typeEnabled,
   merchantCandidates, ruleFor, normMerchant, unusualInfo, staleRate, isRecurring, recurringCandidates,
@@ -58,6 +59,11 @@ function boot() {
   else renderShell();
   subscribe(() => { if (state.onboarded && document.getElementById('screen')) rerender(); });
   document.addEventListener('click', onClick);
+  // Respaldo diario: necesita un toque de la persona para poder descargar el archivo.
+  document.addEventListener('click', () => {
+    const name = dailyBackupIfDue();
+    if (name) toast('Guardé tu respaldo de hoy en Descargas');
+  }, { capture: true });
   document.addEventListener('keydown', onKey);
   setupBackGuard();
   setTimeout(autoCheckUpdate, 3000);
@@ -236,6 +242,7 @@ function homeNoticeHTML() {
     stale: () => (c.method
       ? { emoji: '⏰', title: `Tu ${methodLabel(c.method)} no se actualiza desde el ${dateShort(c.last)}`, text: '¿Importamos sus movimientos?', actions: [['Importar', 'import'], ['Ahora no', 'no']] }
       : { emoji: '⏰', title: c.ago === null ? 'Aún no te pones al día con tu banco' : `Hace ${c.ago} días que no te pones al día`, text: 'Sube capturas o el archivo de tu banco y la IA hace el resto.', actions: [['Ponerme al día', 'import'], ['Ahora no', 'no']] }),
+    backup: () => ({ emoji: '🗂️', title: c.ago === null ? 'Aún no te has enviado un respaldo' : `Hace ${c.ago} días que no te envías tu respaldo`, text: 'Tus datos solo viven en este teléfono. Envíate el archivo por WhatsApp, Drive o correo.', actions: [['Enviar respaldo', 'share'], ['Ahora no', 'later']] }),
     recurring: () => ({ emoji: '🔁', title: `${esc(c.name)} ${money(c.amount)} se repite cada mes`, text: '¿Lo marco como cargo recurrente? Lo verás con 🔁 en tus gastos.', actions: [['Marcar', 'mark'], ['No', 'no']] }),
   }[c.type]();
   return noticeCard({ key: c.key, ...card, cls: 'home-notice' });
@@ -270,6 +277,21 @@ async function noticeDo(key, act) {
     return;
   }
   if (act === 'done') { resolveNotice(key, 'done'); return; }
+  if (c.type === 'backup' && act === 'later') {
+    // "Ahora no" en el respaldo no es para siempre: vuelve en una semana.
+    state.notices[key] = { acted: true, until: toISO(addDays(new Date(), 7)) };
+    save();
+    toast('Te lo recuerdo en una semana');
+    return;
+  }
+  if (c.type === 'backup' && act === 'share') {
+    const r = await shareBackup();
+    if (r === 'cancelled') return;
+    resolveNotice(key, 'done');
+    toast(r === 'shared' ? 'Respaldo enviado ✓' : 'Respaldo guardado en Descargas');
+    rerender();
+    return;
+  }
   if (c.type === 'due' && act === 'view') { resolveNotice(key, 'acted'); view.filters = { ...view.filters, method: c.method.name, period: '90' }; switchTab('expenses'); }
   if (c.type === 'pace' && act === 'view') { resolveNotice(key, 'acted'); openBudgetDetail(c.budget.id); }
   if (c.type === 'period' && act === 'edit') { resolveNotice(key, 'done'); if (c.budget.groupId) openPlanEditor({ groupId: c.budget.groupId }); else openBudgetEditor(c.budget); }
@@ -479,6 +501,7 @@ function renderReview() {
     <div class="review-top">
       <div class="thin-progress"><span style="--w:${(progress * 100).toFixed(1)}%"></span></div>
       ${reviewNoticesHTML(pend)}
+      ${batchMethodHTML(pend)}
       ${ready.length ? `<button class="btn primary full" data-action="confirm-safe">${icon('check')} Confirmar los ${ready.length} seguros</button>` : ''}
     </div>`;
   if (needs.length) {
@@ -495,6 +518,53 @@ function renderReview() {
       <button class="btn ghost full" data-action="discard-nonexpense">Descartar estos ${notExpense.length}</button></details>`;
   }
   return html;
+}
+
+// Pendientes agrupados por lote de importación (los que no vienen de un lote van juntos).
+function pendingBatches(pend) {
+  const map = new Map();
+  for (const e of pend) {
+    const k = e.batchId || 'otros';
+    if (!map.has(k)) map.set(k, []);
+    map.get(k).push(e);
+  }
+  return [...map.entries()].map(([id, items]) => ({ id, items, at: Math.min(...items.map((x) => x.createdAt || 0)) })).sort((a, b) => b.at - a.at);
+}
+
+// Medio de pago de cada lote, con opción de cambiarlo para todos sus movimientos.
+function batchMethodHTML(pend) {
+  const groups = pendingBatches(pend);
+  return `<div class="card batch-methods">${groups.map((g) => {
+    const counts = new Map();
+    for (const e of g.items) counts.set(e.paymentMethod || '', (counts.get(e.paymentMethod || '') || 0) + 1);
+    const names = [...counts.keys()];
+    const value = names.length === 1
+      ? (names[0] ? esc(names[0]) : '<span class="muted">Sin especificar</span>')
+      : [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([n, k]) => `${n ? esc(n) : 'sin especificar'} (${k})`).join(', ');
+    const label = groups.length === 1 ? `${g.items.length} ${g.items.length === 1 ? 'movimiento' : 'movimientos'}`
+      : g.id === 'otros' ? `Otros pendientes · ${g.items.length}`
+        : `Lote del ${new Date(g.at).toLocaleString('es-MX', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} · ${g.items.length}`;
+    return `<div class="batch-method"><span class="bm-icon">💳</span>
+      <span class="row-main"><span class="row-sub">Medio de pago · ${label}</span><span class="row-title ${names.length > 1 ? 'mixed' : ''}">${names.length > 1 ? 'Varios: ' : ''}${value}</span></span>
+      <button class="btn ghost sm" data-action="batch-method" data-id="${esc(g.id)}">${names.length > 1 || !names[0] ? 'Asignar a todos' : 'Cambiar'}</button></div>`;
+  }).join('')}</div>`;
+}
+
+async function setBatchMethod(groupId) {
+  const group = pendingBatches(pending()).find((g) => g.id === groupId);
+  if (!group) return;
+  const current = new Set(group.items.map((e) => e.paymentMethod || ''));
+  const v = await pickMethod({ title: `Medio de pago para ${group.items.length === 1 ? 'este movimiento' : `los ${group.items.length} movimientos`}`, selected: current.size === 1 ? [...current][0] : null });
+  if (v === undefined || v === null) return;
+  const before = group.items.map((e) => [e.id, e.paymentMethod]);
+  for (const e of group.items) e.paymentMethod = v;
+  save();
+  toast(`${v || 'Sin especificar'} en ${group.items.length} ${group.items.length === 1 ? 'movimiento' : 'movimientos'}`, {
+    undo: () => {
+      for (const [id, pm] of before) { const x = state.expenses.find((y) => y.id === id); if (x) x.paymentMethod = pm; }
+      save();
+    },
+  });
 }
 
 // Tarjetas o cuentas que aparecen en los movimientos pero no están registradas.
@@ -530,7 +600,7 @@ function needsCard(e) {
     <div class="swipe-content">
       <div class="r-top">
         <span class="avatar" style="--cat:var(--c${c.color})">${c.emoji}</span>
-        <span class="row-main"><span class="row-title">${esc(e.merchant || e.description)}</span><span class="row-sub">${dateShort(e.date)} · ${esc(c.name)}</span></span>
+        <span class="row-main"><span class="row-title">${esc(e.merchant || e.description)}</span><span class="row-sub">${dateShort(e.date)} · ${esc(c.name)}${e.paymentMethod ? ` · ${esc(e.paymentMethod)}` : ''}</span></span>
         <span class="row-amt"><span class="num">${money(e.amount, e.currency)}</span></span>
       </div>
       ${dup ? `<div class="dup"><span class="tag warn">Posible duplicado</span>
@@ -558,7 +628,7 @@ function readyRow(e) {
     <div class="swipe-content">
       <div class="r-line" data-action="expand" data-id="${e.id}">
         <span class="avatar" style="--cat:var(--c${c.color})">${c.emoji}</span>
-        <span class="row-main"><span class="row-title">${esc(e.merchant || e.description)}</span><span class="row-sub">${esc(c.name)} · ${dateShort(e.date)}</span></span>
+        <span class="row-main"><span class="row-title">${esc(e.merchant || e.description)}</span><span class="row-sub">${esc(c.name)} · ${dateShort(e.date)}${e.paymentMethod ? ` · ${esc(e.paymentMethod)}` : ''}</span></span>
         <span class="row-amt"><span class="num">${money(e.amount, e.currency)}</span></span>
         <button class="mini-btn" data-action="confirm" data-id="${e.id}" aria-label="Confirmar">${icon('check')}</button>
       </div>
@@ -566,6 +636,7 @@ function readyRow(e) {
         <label>Categoría<select data-field="categoryId" data-id="${e.id}">${visibleCategories().map((x) => `<option value="${x.id}" ${x.id === e.categoryId ? 'selected' : ''}>${x.emoji} ${esc(x.name)}</option>`).join('')}</select></label>
         <label>Centro<select data-field="costCenterId" data-id="${e.id}">${state.costCenters.map((x) => `<option value="${x.id}" ${x.id === e.costCenterId ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
         <label>Fecha<input type="date" data-field="date" data-id="${e.id}" value="${e.date}"></label>
+        <label>Medio<select data-field="paymentMethod" data-id="${e.id}"><option value="">Sin especificar</option>${[...paymentMethods().map((m) => m.name), ...(e.paymentMethod && !paymentMethods().some((m) => m.name === e.paymentMethod) ? [e.paymentMethod] : [])].map((n) => `<option value="${esc(n)}" ${n === e.paymentMethod ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
         <button class="btn ghost sm" data-action="discard" data-id="${e.id}">Descartar</button>
       </div>` : ''}
     </div>
@@ -1378,6 +1449,7 @@ function openBatch({ account: preset = '' } = {}) {
       const movs = result.movimientos || [];
       step(`Encontré ${movs.length} ${movs.length === 1 ? 'movimiento' : 'movimientos'}`);
       const created = [];
+      const batchId = uid('lote');
       for (const m of movs) {
         const candidate = { amount: m.monto, date: m.fecha, currency: m.moneda };
         const dup = m.tipo === 'gasto' ? findDuplicate(candidate, created.map((c) => c.id)) : null;
@@ -1388,7 +1460,7 @@ function openBatch({ account: preset = '' } = {}) {
         if (rule && rule !== m.categoria) { m.categoria = rule; m.pregunta = ''; m.opciones = []; m.confianza = 'alta'; }
         const e = addExpenseSilently({
           date: m.fecha, merchant: m.comercio, description: m.descripcion, amount: m.monto, currency: m.moneda,
-          categoryId: m.categoria, paymentMethod: method, status: 'pending', source: 'batch',
+          categoryId: m.categoria, paymentMethod: method, status: 'pending', source: 'batch', batchId,
           ai: { tipo: m.tipo, confianza: m.confianza, pregunta: m.pregunta, opciones: m.opciones, dupOf: dup?.id, last4: m.ultimos_digitos || '' },
         });
         created.push(e);
@@ -1652,6 +1724,7 @@ function openSettings() {
       </div>
       <h3 class="group-title">Datos</h3>
       <div class="card list-card">
+        <button class="set-row" data-act="backup"><span class="grow">Respaldo<small>${backupMeta().lastFileDay ? `Último archivo: ${dateShort(backupMeta().lastFileDay)}` : 'Aún no hay archivos de respaldo'}${backupMeta().lastSent ? ` · enviado ${dateShort(backupMeta().lastSent)}` : ''}</small></span>${icon('chevron')}</button>
         <button class="set-row" data-act="sample"><span>Cargar datos de ejemplo</span>${icon('chevron')}</button>
         <button class="set-row danger" data-act="wipe"><span>Borrar todo</span>${icon('chevron')}</button>
       </div>
@@ -1720,6 +1793,7 @@ function openSettings() {
       draw();
     }
     if (act === 'diag') openAiDiagnostic();
+    if (act === 'backup') openBackup(draw);
     if (act === 'methods') openPaymentMethods(draw);
     if (act === 'notices') openNoticeSettings(draw);
     if (act === 'categories') openCategories(draw);
@@ -1868,6 +1942,71 @@ function modelChangedMsg(c) {
   return c.reason === 'busy'
     ? `“${c.from}” estaba saturado: esta vez leí con ${c.to}.`
     : `Cambié a ${c.to}: “${c.from}” ya no está disponible.`;
+}
+
+// ---------------------------------------------------------------- Respaldo
+
+function openBackup(onDone) {
+  const sheet = openSheet({ title: 'Respaldo', full: true, body: '', onClose: onDone });
+  const draw = () => {
+    const m = backupMeta();
+    sheet.setBody(`
+      <p class="lead">Tus datos viven solo en este teléfono. Si borras los datos del navegador o cambias de teléfono, el archivo de respaldo es lo que te permite recuperarlos.</p>
+      <div class="card list-card">
+        <div class="set-row"><span class="grow">Último archivo</span><b>${m.lastFileDay ? dateShort(m.lastFileDay) : 'Nunca'}</b></div>
+        <div class="set-row"><span class="grow">Último envío</span><b>${m.lastSent ? dateShort(m.lastSent) : 'Nunca'}</b></div>
+      </div>
+      <h3 class="group-title">Automático</h3>
+      <div class="card list-card">
+        <label class="set-row"><span class="grow">Respaldo diario en Descargas<small>Una vez al día, al usar la app, guarda un archivo si tus datos cambiaron</small></span><input type="checkbox" class="switch" data-b="auto" ${m.auto !== false ? 'checked' : ''}></label>
+        <label class="set-row"><span class="grow">Recordatorio semanal<small>Un aviso en Inicio si llevas 7 días sin enviarte el respaldo</small></span><input type="checkbox" class="switch" data-b="remind" ${typeEnabled('backup') ? 'checked' : ''}></label>
+      </div>
+      <h3 class="group-title">Ahora</h3>
+      <div class="card list-card">
+        <button class="set-row" data-b="share"><span class="grow">Enviar respaldo<small>Por WhatsApp, Drive, correo… con el menú de compartir</small></span>${icon('chevron')}</button>
+        <button class="set-row" data-b="download"><span class="grow">Guardar en Descargas</span>${icon('chevron')}</button>
+        <label class="set-row" data-b="restore"><span class="grow">Restaurar desde un archivo<small>Reemplaza los datos de este teléfono</small></span>${icon('chevron')}<input type="file" accept=".json,application/json" data-b="file" hidden></label>
+      </div>
+      <p class="hint">El archivo incluye gastos, presupuestos, medios de pago, categorías, centros de costo y lo que la app aprendió. No incluye tus claves de IA. Los archivos diarios se van acumulando en Descargas: puedes borrar los viejos cuando quieras.</p>`);
+  };
+  sheet.el.addEventListener('change', async (e) => {
+    const b = e.target.dataset.b;
+    if (b === 'auto') { backupMeta().auto = e.target.checked; save(); }
+    if (b === 'remind') { state.settings.noticeTypes = { ...state.settings.noticeTypes, backup: e.target.checked }; save(); }
+    if (b === 'file') {
+      const file = e.target.files?.[0];
+      e.target.value = '';
+      if (!file) return;
+      let info;
+      try { info = await readBackup(file); } catch (err) { toast(err.message); return; }
+      const s = info.summary;
+      const when = s.created ? s.created.toLocaleString('es-MX', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'fecha desconocida';
+      const ok = await confirmDialog({
+        title: 'Restaurar respaldo',
+        text: `Respaldo del ${when} (v${s.appVersion}): ${s.expenses} gastos, ${s.budgets} presupuestos y ${s.methods} medios de pago. Reemplazará todo lo que hay en este teléfono, excepto tus claves de IA.`,
+        confirmText: 'Restaurar',
+        danger: true,
+      });
+      if (!ok) return;
+      // Antes de reemplazar, se guarda un archivo con los datos actuales por si acaso.
+      if (state.expenses.length) downloadBackup();
+      applyBackup(info.data);
+      animated.clear();
+      sheet.close();
+      if (state.onboarded) { switchTab('home'); } else renderOnboarding();
+      toast(`Respaldo restaurado: ${s.expenses} gastos`);
+    }
+  });
+  sheet.el.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-b]')?.dataset.b;
+    if (b === 'share') {
+      const r = await shareBackup();
+      if (r !== 'cancelled') toast(r === 'shared' ? 'Respaldo enviado ✓' : 'Respaldo guardado en Descargas');
+      draw();
+    }
+    if (b === 'download') { downloadBackup(); toast('Respaldo guardado en Descargas'); draw(); }
+  });
+  draw();
 }
 
 // ---------------------------------------------------------------- Diagnóstico de IA
@@ -2062,6 +2201,7 @@ function onClick(e) {
     'dup-two': () => { const x = state.expenses.find((v) => v.id === id); if (x) updateExpense(id, { ai: { ...x.ai, dupOf: undefined } }); },
     'is-expense': () => { const x = state.expenses.find((v) => v.id === id); if (x) updateExpense(id, { ai: { ...x.ai, tipo: 'gasto' } }); },
     'confirm-safe': confirmSafe,
+    'batch-method': () => setBatchMethod(id),
     notice: () => noticeDo(id, el.dataset.do),
     'unusual-ok': () => { const x = state.expenses.find((v) => v.id === id); if (x) updateExpense(id, { ai: { ...x.ai, unusualOk: true } }); },
     'discard-nonexpense': discardNonExpense,

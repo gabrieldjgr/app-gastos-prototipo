@@ -3,6 +3,26 @@
 Todos los cambios notables de este proyecto se documentan aquí.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/); versionado según [SemVer](https://semver.org/lang/es/).
 
+## [0.6.0] - 2026-11-13
+
+### Añadido
+- **Respaldo** en Ajustes → Datos:
+  - **Diario y automático:** una vez al día, al usar la app, guarda `ritmo-respaldo-AAAA-MM-DD.json` en Descargas. Solo lo hace si tus datos cambiaron.
+  - **Enviar respaldo** abre el menú de compartir del teléfono (WhatsApp, Drive, correo…). **Guardar en Descargas** lo descarga en el momento.
+  - **Restaurar desde un archivo** muestra un resumen y pide confirmación. Antes de reemplazar, descarga una copia de los datos actuales.
+  - El archivo nunca incluye las claves de IA. Al restaurar, se conservan las del teléfono.
+- **Recordatorio semanal de respaldo**: un aviso en Inicio si llevas 7 días sin enviarte el archivo.
+  - "Ahora no" lo pospone una semana.
+  - Se puede apagar en Respaldo o en Avisos inteligentes.
+- **Medio de pago del lote en Revisar**:
+  - Una barra muestra el medio de pago de los movimientos pendientes (o "Varios", con cuántos de cada uno).
+  - "Cambiar" o "Asignar a todos" lo aplica a todo el lote, con deshacer.
+  - Si hay pendientes de varias importaciones, aparece una barra por lote.
+- Cada pendiente muestra su medio de pago, y la edición rápida de los "Listos" incluye el campo **Medio**.
+
+### Corregido
+- La edición rápida de los "Listos" se salía de la pantalla en teléfonos.
+
 ## [0.5.3] - 2026-11-12
 
 ### Corregido

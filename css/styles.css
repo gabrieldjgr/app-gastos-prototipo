@@ -456,7 +456,10 @@ small { font-size: 13px; }
 .mini-btn .ico { width: 18px; height: 18px; }
 .ready .swipe-content { flex-direction: column; align-items: stretch; gap: 0; padding: 0; }
 .r-line { display: flex; align-items: center; gap: 12px; padding: 10px 8px 10px 12px; min-height: 60px; }
-.inline-edit { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 12px 12px; }
+.inline-edit { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; padding: 0 12px 12px; }
+.inline-edit label { min-width: 0; }
+.inline-edit select, .inline-edit input { width: 100%; min-width: 0; }
+.inline-edit > .btn { grid-column: 1 / -1; }
 .inline-edit label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-2); font-weight: 500; }
 .inline-edit select, .inline-edit input { height: 40px; border-radius: 12px; border: 1px solid var(--border); background: var(--sunken); padding: 0 10px; font-size: 14px; color: var(--text); }
 .inline-edit .btn { align-self: end; }
@@ -610,6 +613,14 @@ small { font-size: 13px; }
 .diag-detail { grid-column: 2 / -1; margin: 4px 0 0; padding: 8px 10px; border-radius: 10px; background: var(--sunken); color: var(--text-2); font: 12px/16px ui-monospace, 'SF Mono', Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .diag-item.fail .diag-detail { background: var(--over-soft); color: var(--over); }
 .diag-empty { padding: 12px 14px; margin: 0; }
+.batch-methods { padding: 4px 0; }
+.batch-method { display: flex; align-items: center; gap: 12px; padding: 10px 14px; }
+.batch-method + .batch-method { border-top: 1px solid var(--border); }
+.batch-method .bm-icon { font-size: 20px; }
+.batch-method .row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.batch-method .row-title { font-weight: 600; }
+.batch-method .row-title, .batch-method .row-sub { white-space: normal; overflow: visible; text-overflow: clip; }
+.batch-method .row-title.mixed { font-size: 13px; font-weight: 500; }
 .diag-use { grid-column: 2 / -1; justify-self: start; margin-top: 8px; }
 .diag-actions { margin-top: 16px; }
 

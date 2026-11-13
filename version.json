@@ -1,1 +1,1 @@
-{"version":"0.5.3","date":"2026-11-12","notes":["Si un modelo no responde a tiempo, la app lee con uno más ligero","Diagnóstico más rápido, con botón para cambiar al modelo que sí funciona"]}
+{"version":"0.6.0","date":"2026-11-13","notes":["Respaldo diario automático en Descargas, envío con un toque y restauración","Recordatorio semanal para enviarte el respaldo","En Revisar puedes elegir o cambiar el medio de pago de todo el lote"]}

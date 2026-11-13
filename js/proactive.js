@@ -13,6 +13,7 @@ export const NOTICE_TYPES = [
   { id: 'merchant', name: 'Aprender comercios', desc: 'Propone recordar la categoría de un comercio' },
   { id: 'card', name: 'Tarjetas nuevas', desc: 'Cuando aparece una tarjeta que no tienes registrada' },
   { id: 'unusual', name: 'Gastos inusuales', desc: 'Cargos muy por encima de lo habitual' },
+  { id: 'backup', name: 'Recordatorio de respaldo', desc: 'Cada semana, para que te envíes tu archivo de respaldo' },
 ];
 
 const SNOOZE_DAYS = 30;
@@ -166,6 +167,13 @@ export function homeCandidates() {
   if (!out.some((c) => c.type === 'stale') && state.expenses.length) {
     const ago = state.lastBatchAt ? daysAgo(state.lastBatchAt) : null;
     if (ago === null || ago > 10) out.push({ type: 'stale', key: `stale:any:${state.lastBatchAt || 'nunca'}`, priority: 54, ago });
+  }
+
+  // 6. Respaldo: 7 días o más sin enviarse el archivo (la clave cambia con cada envío).
+  if (state.expenses.length) {
+    const sent = state.backup?.lastSent || null;
+    const ago = sent ? daysAgo(sent) : null;
+    if (ago === null || ago >= 7) out.push({ type: 'backup', key: `backup:${sent || 'nunca'}`, priority: 45, ago });
   }
 
   // 5. Cargos recurrentes: mismo comercio y monto (±5 %) en al menos 2 de los últimos 3 meses.
