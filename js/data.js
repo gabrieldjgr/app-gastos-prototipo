@@ -59,8 +59,8 @@ export const WEEKDAYS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', '
 
 export const DASHBOARD_WIDGETS = [
   { id: 'pace', name: 'Ritmo de presupuestos', desc: 'Ideal vs. real, desliza entre presupuestos' },
-  { id: 'categories', name: 'Gasto por categoría', desc: 'En qué se va el dinero este mes' },
-  { id: 'trend', name: 'Evolución', desc: 'Gasto por semana en los últimos 3 meses' },
+  { id: 'categories', name: 'Gasto por categoría', desc: 'En qué se va el dinero en el período elegido' },
+  { id: 'trend', name: 'Evolución', desc: 'Gasto por mes o semana; toca una barra para ver ese período' },
   { id: 'costcenters', name: 'Centros de costo', desc: 'Total por centro de costo' },
-  { id: 'merchants', name: 'Top comercios', desc: 'Dónde gastas más seguido' },
+  { id: 'merchants', name: 'Top comercios', desc: 'Dónde gastas más en el período elegido' },
 ];

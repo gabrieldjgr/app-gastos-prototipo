@@ -1,7 +1,8 @@
 // Gráficos hechos a mano en SVG/HTML: ritmo de presupuesto, barras por categoría, evolución, etc.
-import { money, moneyShort, dateShort, addDays, esc, toISO, parseISO, monthName } from './format.js';
+import { money, moneyShort, dateShort, addDays, esc, toISO, parseISO, monthName, dateRange } from './format.js';
 import { categoryById, costCenterById, state, confirmed } from './store.js';
 import { budgetStats } from './budget.js';
+import { periodOf, periodRange, shiftPeriod, isCurrent, samePeriod, periodLabel, periodShort, sumIn, budgetStatsFor } from './period.js';
 
 const W = 328;
 const H = 190;
@@ -163,16 +164,26 @@ export function attachPaceTouch(wrap, stats) {
 }
 
 // Tarjeta de ritmo completa (cabecera, cifra, mensaje, gráfico y pie).
-export function paceCard(budget, { large = false } = {}) {
-  const stats = budgetStats(budget, state.expenses);
+export function paceCard(budget, { large = false, stats: given = null, closed = false } = {}) {
+  const stats = given || budgetStats(budget, state.expenses);
   const cat = budget.categoryId ? categoryById(budget.categoryId) : null;
   const cc = costCenterById(budget.costCenterId);
   const emoji = cat ? cat.emoji : cc?.emoji || '🎯';
-  const statusText = { ok: '✓ En ritmo', warn: '▲ Cerca del límite', over: '● Sobre presupuesto' }[stats.status];
   const over = stats.remaining < 0;
-  return `<article class="card pace-card ${large ? 'large' : ''}" data-budget="${budget.id}" data-status="${stats.status}">
+  const closedPct = stats.amount > 0 ? Math.round(Math.abs(stats.spent / stats.amount - 1) * 100) : 0;
+  const statusText = closed
+    ? (over ? `● Se pasó ${money(-stats.remaining, undefined, { hero: true })}` : `✓ Cerró ${closedPct} % abajo`)
+    : { ok: '✓ En ritmo', warn: '▲ Cerca del límite', over: '● Sobre presupuesto' }[stats.status];
+  const foot = closed
+    ? `<div><span class="overline">Gastado</span><span class="num">${money(stats.spent, undefined, { hero: true })}</span></div>
+      <div><span class="overline">Presupuesto</span><span class="num">${money(stats.amount, undefined, { hero: true })}</span></div>
+      <div><span class="overline">Diferencia</span><span class="num ${over ? 'txt-over' : 'txt-ok'}">${money(stats.spent - stats.amount, undefined, { hero: true, sign: true })}</span></div>`
+    : `<div><span class="overline">${over ? 'Excedido' : 'Disponible'}</span><span class="num ${over ? 'txt-over' : ''}">${money(Math.abs(stats.remaining), undefined, { hero: true })}</span></div>
+      <div><span class="overline">Por día restante</span><span class="num">${stats.daysLeft > 0 ? money(stats.perDayLeft, undefined, { hero: true }) : '—'}</span></div>
+      <div><span class="overline">Días restantes</span><span class="num">${stats.daysLeft}</span></div>`;
+  return `<article class="card pace-card ${large ? 'large' : ''} ${closed ? 'closed' : ''}" data-budget="${budget.id}" data-status="${stats.status}">
     <header class="pace-head">
-      <div class="pace-title"><span class="avatar sm" style="--cat:var(--c${cat ? cat.color : 6})">${emoji}</span><span>${esc(budget.name)}</span></div>
+      <div class="pace-title"><span class="avatar sm" style="--cat:var(--c${cat ? cat.color : 6})">${emoji}</span><span>${esc(budget.name)}${closed ? `<small class="pace-win">${esc(dateRange(stats.start, stats.end))}</small>` : ''}</span></div>
       <span class="status-pill ${stats.status}">${statusText}</span>
     </header>
     <div class="hero-row">
@@ -181,11 +192,7 @@ export function paceCard(budget, { large = false } = {}) {
     </div>
     <p class="pace-msg ${stats.status}">${paceMessageHTML(stats)}</p>
     <div class="pace-wrap">${paceSVG(stats)}<div class="pace-tip" aria-hidden="true"></div></div>
-    <footer class="pace-foot">
-      <div><span class="overline">${over ? 'Excedido' : 'Disponible'}</span><span class="num ${over ? 'txt-over' : ''}">${money(Math.abs(stats.remaining), undefined, { hero: true })}</span></div>
-      <div><span class="overline">Por día restante</span><span class="num">${stats.daysLeft > 0 ? money(stats.perDayLeft, undefined, { hero: true }) : '—'}</span></div>
-      <div><span class="overline">Días restantes</span><span class="num">${stats.daysLeft}</span></div>
-    </footer>
+    <footer class="pace-foot">${foot}</footer>
   </article>`;
 }
 
@@ -221,111 +228,142 @@ export function ghostPace() {
 }
 
 // ---------- Widgets del inicio ----------
+// Todos reciben ctx = { p, r, cmp }: período elegido, su rango y el rango con el que se compara.
 
-function monthWindow(ref = new Date()) {
-  const start = new Date(ref.getFullYear(), ref.getMonth(), 1);
-  const end = new Date(ref.getFullYear(), ref.getMonth() + 1, 1);
-  return { start: toISO(start), end: toISO(end) };
+const DELTA_MIN = 0.15; // solo se marca el cambio de una categoría si es de 15 % o más
+
+function cmpName(cmp) {
+  if (cmp.prev.mode === 'week') return cmp.partial ? 'la semana pasada a esta altura' : 'la semana anterior';
+  const m = monthName(cmp.start, false);
+  return cmp.partial ? `${m} al día ${cmp.day}` : m;
 }
 
-export function categoryBars() {
-  const { start, end } = monthWindow();
+// "▲ 12 % vs oct al día 13": más gasto en color de alerta, menos gasto en verde.
+export function deltaChip(total, prev, cmp) {
+  if (!(prev > 0)) return '';
+  const pct = Math.round((total / prev - 1) * 100);
+  if (Math.abs(pct) < 1) return `<span class="delta same">= igual que ${esc(cmpName(cmp))}</span>`;
+  return `<span class="delta ${pct > 0 ? 'up' : 'down'}" title="Antes: ${esc(money(prev, undefined, { hero: true }))}">${pct > 0 ? '▲' : '▼'} ${Math.abs(pct)} % vs ${esc(cmpName(cmp))}</span>`;
+}
+
+export function categoryBars(ctx) {
+  const { r, cmp, p } = ctx;
   const totals = {};
-  for (const e of confirmed()) if (e.date >= start && e.date < end) totals[e.categoryId] = (totals[e.categoryId] || 0) + e.amountBase;
+  const before = {};
+  for (const e of confirmed()) {
+    if (e.date >= r.startISO && e.date < r.endISO) totals[e.categoryId] = (totals[e.categoryId] || 0) + e.amountBase;
+    if (e.date >= cmp.startISO && e.date < cmp.endISO) before[e.categoryId] = (before[e.categoryId] || 0) + e.amountBase;
+  }
   const sorted = Object.entries(totals).sort((a, b) => b[1] - a[1]);
-  if (!sorted.length) return emptyWidget('Aún no hay gastos este mes');
-  const top = sorted.slice(0, 6);
+  if (!sorted.length) return emptyWidget(`Sin gastos en ${periodLabel(p)}`);
+  const top = sorted.slice(0, 6).map(([id, v]) => [id, v, true]);
   const rest = sorted.slice(6).reduce((s, [, v]) => s + v, 0);
   if (rest > 0) {
+    // "Otros" agrupa varias categorías: su comparación no tendría sentido.
     const otros = top.find(([k]) => k === 'otros');
-    if (otros) otros[1] += rest;
-    else top.push(['otros', rest]);
+    if (otros) { otros[1] += rest; otros[2] = false; } else top.push(['otros', rest, false]);
   }
   const max = top[0][1];
   const total = sorted.reduce((s, [, v]) => s + v, 0);
-  return `<div class="bars">${top.map(([id, v]) => {
+  const prevTotal = Object.values(before).reduce((s, v) => s + v, 0);
+  return `<div class="bars">${top.map(([id, v, comparable]) => {
     const c = categoryById(id);
+    const prev = before[id] || 0;
+    const diff = v - prev;
+    const showDelta = comparable && prev > 0 && Math.abs(diff) / prev >= DELTA_MIN;
     return `<div class="bar-row" data-action="filter-category" data-id="${id}">
       <span class="avatar sm" style="--cat:var(--c${c.color})">${c.emoji}</span>
-      <div class="bar-main"><div class="bar-label"><span>${esc(c.name)}</span><span class="num">${money(v, undefined, { hero: true })}</span></div>
+      <div class="bar-main"><div class="bar-label"><span>${esc(c.name)}</span><span class="num">${showDelta ? `<small class="delta-mini ${diff > 0 ? 'up' : 'down'}">${diff > 0 ? '▲' : '▼'} ${moneyShort(Math.abs(diff))}</small> ` : ''}${money(v, undefined, { hero: true })}</span></div>
       <div class="bar-track"><div class="bar-fill" style="--w:${((v / max) * 100).toFixed(1)}%;background:var(--c${c.color})"></div></div></div>
     </div>`;
-  }).join('')}</div><p class="widget-foot">Total del mes · <b class="num">${money(total, undefined, { hero: true })}</b></p>`;
+  }).join('')}</div><p class="widget-foot">Total · <b class="num">${money(total, undefined, { hero: true })}</b> ${deltaChip(total, prevTotal, cmp)}</p>`;
 }
 
-export function trendBars(mode = 'month') {
-  const buckets = [];
-  const now = new Date();
-  if (mode === 'month') {
-    for (let i = 5; i >= 0; i--) {
-      const s = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const e = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
-      buckets.push({ label: monthName(s, false), start: toISO(s), end: toISO(e) });
-    }
-  } else {
-    const monday = addDays(now, -((now.getDay() + 6) % 7));
-    for (let i = 5; i >= 0; i--) {
-      const s = addDays(monday, -7 * i);
-      buckets.push({ label: dateShort(s), start: toISO(s), end: toISO(addDays(s, 7)) });
-    }
-  }
+// Número de períodos entre a y b (b posterior a a).
+function stepsBetween(a, b) {
+  const sa = parseISO(a.start);
+  const sb = parseISO(b.start);
+  if (a.mode === 'month') return (sb.getFullYear() - sa.getFullYear()) * 12 + sb.getMonth() - sa.getMonth();
+  return Math.round((sb - sa) / (7 * 86400000));
+}
+
+export function trendBars(ctx) {
+  const { p } = ctx;
+  const cur = periodOf(p.mode);
+  // Seis barras que terminan en el período actual, salvo que el elegido quede fuera: entonces se corre la ventana.
+  const back = stepsBetween(p, cur);
+  const last = back > 5 ? shiftPeriod(p, 2) : cur;
   const exp = confirmed();
-  for (const b of buckets) b.total = exp.filter((e) => e.date >= b.start && e.date < b.end).reduce((s, e) => s + e.amountBase, 0);
+  const buckets = [];
+  for (let i = 5; i >= 0; i--) {
+    const q = shiftPeriod(last, -i);
+    const r = periodRange(q);
+    buckets.push({ q, total: sumIn(exp, r.startISO, r.endISO), current: isCurrent(q), selected: samePeriod(q, p) });
+  }
   const max = Math.max(...buckets.map((b) => b.total), 1);
-  const prev = buckets.slice(0, -1).filter((b) => b.total > 0);
-  const avg = prev.length ? prev.reduce((s, b) => s + b.total, 0) / prev.length : 0;
+  // El promedio solo usa períodos completos: el actual aún no termina.
+  const done = buckets.filter((b) => !b.current && b.total > 0);
+  const avg = done.length ? done.reduce((s, b) => s + b.total, 0) / done.length : 0;
+  const unit = p.mode === 'month' ? 'mes' : 'semana';
   return `<div class="seg small" role="tablist">
-      <button class="${mode === 'month' ? 'on' : ''}" data-action="trend-mode" data-mode="month">Meses</button>
-      <button class="${mode === 'week' ? 'on' : ''}" data-action="trend-mode" data-mode="week">Semanas</button>
+      <button class="${p.mode === 'month' ? 'on' : ''}" data-action="period-mode" data-mode="month">Meses</button>
+      <button class="${p.mode === 'week' ? 'on' : ''}" data-action="period-mode" data-mode="week">Semanas</button>
     </div>
     <div class="trend">
-      ${avg > 0 ? `<div class="trend-avg" style="bottom:${(20 + (avg / max) * 116).toFixed(1)}px"><span>prom. ${moneyShort(avg)}</span></div>` : ''}
-      ${buckets.map((b, i) => `<div class="trend-col ${i === buckets.length - 1 ? 'current' : ''}">
-        <span class="trend-val">${i === buckets.length - 1 ? moneyShort(b.total) : ''}</span>
-        <div class="trend-bar" style="height:${Math.max(3, (b.total / max) * 116).toFixed(1)}px" title="${esc(money(b.total, undefined, { hero: true }))}"></div>
-        <span class="trend-label">${b.label}</span>
-      </div>`).join('')}
-    </div>`;
+      ${avg > 0 ? `<div class="trend-avg" style="bottom:${(38 + (avg / max) * 106).toFixed(1)}px"><span>prom. ${moneyShort(avg)}</span></div>` : ''}
+      ${buckets.map((b) => `<button class="trend-col ${b.current ? 'current' : ''} ${b.selected ? 'selected' : ''}" data-action="period-set" data-start="${b.q.start}" aria-pressed="${b.selected}" aria-label="${esc(periodLabel(b.q))}: ${esc(money(b.total, undefined, { hero: true }))}">
+        <span class="trend-val">${b.selected ? moneyShort(b.total) : ''}</span>
+        <span class="trend-bar" style="height:${Math.max(3, (b.total / max) * 106).toFixed(1)}px"></span>
+        <span class="trend-label">${periodShort(b.q)}</span>
+        <span class="trend-today">${b.current && !b.selected ? 'hoy' : ''}</span>
+      </button>`).join('')}
+    </div>
+    <p class="widget-foot">Toca una barra para ver ese ${unit}${buckets.some((b) => b.current) ? ' · el actual aún no termina' : ''}</p>`;
 }
 
-export function costCenterRows() {
+export function costCenterRows(ctx) {
+  const { r, p } = ctx;
   const exp = confirmed();
   const rows = state.costCenters.map((cc) => {
     const budget = state.budgets.find((b) => b.costCenterId === cc.id && !b.categoryId);
-    if (budget) {
-      const s = budgetStats(budget, state.expenses);
-      return { cc, value: s.spent, max: s.amount, note: `de ${money(s.amount, undefined, { hero: true })}`, status: s.status };
+    const res = budget ? budgetStatsFor(budget, state.expenses, p) : null;
+    if (res) {
+      const s = res.stats;
+      const sameAsPeriod = toISO(s.start) === r.startISO && toISO(s.end) === r.endISO;
+      return { cc, value: s.spent, max: s.amount, note: `de ${money(s.amount, undefined, { hero: true })}`, win: sameAsPeriod ? '' : dateRange(s.start, s.end), status: s.status };
     }
-    const { start, end } = monthWindow();
-    const v = exp.filter((e) => e.costCenterId === cc.id && e.date >= start && e.date < end).reduce((s, e) => s + e.amountBase, 0);
-    return { cc, value: v, max: null, note: 'este mes', status: null };
+    const v = sumIn(exp, r.startISO, r.endISO, (e) => e.costCenterId === cc.id);
+    return { cc, value: v, max: null, note: '', win: '', status: null };
   });
-  const maxNoBudget = Math.max(...rows.map((r) => r.value), 1);
-  return `<div class="cc-rows">${rows.map((r) => `<div class="cc-row">
-      <span class="avatar sm" style="--cat:var(--c6)">${r.cc.emoji || '📁'}</span>
-      <div class="bar-main"><div class="bar-label"><span>${esc(r.cc.name)}</span><span class="num">${money(r.value, undefined, { hero: true })} <small>${r.note}</small></span></div>
-      <div class="bar-track thin"><div class="bar-fill" style="--w:${Math.min(100, (r.value / (r.max || maxNoBudget)) * 100).toFixed(1)}%;background:${r.status ? STATUS_VAR[r.status] : 'var(--accent)'}"></div></div></div>
+  // En un período pasado se ocultan los centros sin gastos (por ejemplo, un viaje que aún no ocurría).
+  const shown = isCurrent(p) ? rows : rows.filter((x) => x.value > 0);
+  if (!shown.length) return emptyWidget(`Sin gastos en ${periodLabel(p)}`);
+  const maxNoBudget = Math.max(...shown.map((x) => x.value), 1);
+  return `<div class="cc-rows">${shown.map((x) => `<div class="cc-row" data-action="filter-cc" data-id="${x.cc.id}">
+      <span class="avatar sm" style="--cat:var(--c6)">${x.cc.emoji || '📁'}</span>
+      <div class="bar-main"><div class="bar-label"><span>${esc(x.cc.name)}${x.win ? ` <small>· ${esc(x.win)}</small>` : ''}</span><span class="num">${money(x.value, undefined, { hero: true })}${x.note ? ` <small>${x.note}</small>` : ''}</span></div>
+      <div class="bar-track thin"><div class="bar-fill" style="--w:${Math.min(100, (x.value / (x.max || maxNoBudget)) * 100).toFixed(1)}%;background:${x.status ? STATUS_VAR[x.status] : 'var(--accent)'}"></div></div></div>
     </div>`).join('')}</div>`;
 }
 
-export function topMerchants() {
-  const since = toISO(addDays(new Date(), -30));
+export function topMerchants(ctx) {
+  const { r, p } = ctx;
   const groups = {};
   for (const e of confirmed()) {
-    if (e.date < since) continue;
+    if (e.date < r.startISO || e.date >= r.endISO) continue;
     const key = e.merchant || e.description || 'Sin nombre';
     groups[key] = groups[key] || { name: key, total: 0, count: 0, cat: e.categoryId };
     groups[key].total += e.amountBase;
     groups[key].count += 1;
   }
   const list = Object.values(groups).sort((a, b) => b.total - a.total).slice(0, 5);
-  if (!list.length) return emptyWidget('Sin compras en los últimos 30 días');
+  if (!list.length) return emptyWidget(`Sin compras en ${periodLabel(p)}`);
   return `<ol class="merchants">${list.map((m, i) => {
     const c = categoryById(m.cat);
-    return `<li><span class="rank">${i + 1}</span><span class="avatar sm" style="--cat:var(--c${c.color})">${c.emoji}</span>
+    return `<li data-action="filter-merchant" data-name="${esc(m.name)}"><span class="rank">${i + 1}</span><span class="avatar sm" style="--cat:var(--c${c.color})">${c.emoji}</span>
       <span class="m-name">${esc(m.name)}<small>${m.count} ${m.count === 1 ? 'compra' : 'compras'}</small></span>
       <span class="num">${money(m.total, undefined, { hero: true })}</span></li>`;
-  }).join('')}</ol><p class="widget-foot">Últimos 30 días</p>`;
+  }).join('')}</ol>`;
 }
 
 function emptyWidget(text) {

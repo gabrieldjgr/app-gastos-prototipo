@@ -364,19 +364,45 @@ small { font-size: 13px; }
 .seg.wrap button { flex: 1 0 auto; }
 .widget .seg { margin-bottom: 12px; }
 
-.trend { position: relative; display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; height: 160px; align-items: end; }
-.trend-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 6px; }
+.trend { position: relative; display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; height: 170px; align-items: end; }
+.trend-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 6px; padding: 0 2px; border-radius: 10px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.trend-col:active { background: var(--sunken); }
+.trend-col.selected .trend-bar { background: var(--accent); }
+.trend-col.current:not(.selected) .trend-bar { background: repeating-linear-gradient(135deg, var(--border) 0 6px, color-mix(in srgb, var(--border) 55%, transparent) 6px 12px); }
+.trend-col.selected .trend-label { color: var(--accent-text); font-weight: 700; }
+.trend-today { font: 600 10px/12px var(--font); color: var(--accent-text); min-height: 12px; }
 .trend-val { font: 600 11px/14px var(--font); color: var(--accent-text); min-height: 14px; }
 .trend-bar { width: 100%; max-width: 36px; border-radius: 8px 8px 4px 4px; background: var(--border); animation: rise .7s var(--ease-out) both; transform-origin: bottom; }
-.trend-col.current .trend-bar { background: var(--accent); }
+
 .trend-label { font: 500 11px/14px var(--font); color: var(--text-2); }
-.trend-col.current .trend-label { color: var(--text); font-weight: 600; }
+
 @keyframes rise { from { transform: scaleY(0); } to { transform: scaleY(1); } }
 .trend-avg { position: absolute; left: 0; right: 0; border-top: 1.5px dashed var(--text-2); opacity: .55; pointer-events: none; }
-.trend-avg span { position: absolute; left: 0; top: -16px; font: 500 10px/14px var(--font); color: var(--text-2); background: var(--surface); padding-right: 4px; border-radius: 4px; }
+.trend-avg { z-index: 1; }
+.trend-avg span { position: absolute; left: 0; top: -16px; padding-left: 4px; font: 500 10px/14px var(--font); color: var(--text-2); background: var(--surface); padding-right: 4px; border-radius: 4px; }
 
 .merchants { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
-.merchants li { display: flex; align-items: center; gap: 10px; }
+.merchants li { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.cc-row { cursor: pointer; }
+.period-bar { display: flex; align-items: center; gap: 4px; margin: -4px 0 14px; flex-wrap: wrap; }
+.period-chip { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); font: 600 15px/1 var(--font); color: var(--text); }
+.period-chip .caret { font-size: 10px; color: var(--text-2); }
+.period-bar.past .period-chip { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+.period-bar.past .period-chip .caret { color: var(--on-accent); opacity: .8; }
+.period-arrow:disabled { opacity: .3; }
+.back-today { margin-left: auto; height: 32px; }
+.delta { display: inline-block; margin-left: 6px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.delta.up { background: var(--over-soft); color: var(--over); }
+.delta.down { background: var(--ok-soft); color: var(--ok); }
+.delta.same { background: var(--sunken); color: var(--text-2); }
+.delta-mini { font-size: 11px; font-weight: 600; margin-right: 4px; }
+.delta-mini.up { color: var(--over); }
+.delta-mini.down { color: var(--ok); }
+.pace-win { display: block; font: 500 12px/16px var(--font); color: var(--text-2); }
+.txt-ok { color: var(--ok); }
+.empty-period { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 24px 16px; }
+.empty-period h3 { font: 600 17px/22px var(--font); }
+.empty-period p { color: var(--text-2); font-size: 14px; }
 .rank { width: 16px; color: var(--text-2); font: 600 13px var(--font); text-align: center; }
 .m-name { flex: 1; min-width: 0; display: flex; flex-direction: column; font-weight: 600; font-size: 14px; line-height: 18px; }
 .m-name small { color: var(--text-2); font-weight: 400; font-size: 12px; }

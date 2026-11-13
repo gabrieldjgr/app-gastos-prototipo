@@ -11,6 +11,9 @@ import {
 } from './format.js';
 import { budgetStats, budgetWindow } from './budget.js';
 import {
+  periodOf, periodRange, shiftPeriod, isCurrent, periodLabel, switchMode, compareRange, sumIn, budgetStatsFor, firstExpenseDate,
+} from './period.js';
+import {
   paceCard, ghostPace, prepareDraw, attachPaceTouch, categoryBars, trendBars, costCenterRows,
   topMerchants, progressWithNotch, heroMoney, paceSVG,
 } from './charts.js';
@@ -33,7 +36,7 @@ import {
 const app = document.getElementById('app');
 const view = {
   tab: 'home',
-  trendMode: 'month',
+  period: null, // período elegido en Inicio (null = el mes actual); no se guarda: al abrir la app vuelve a hoy
   filters: { period: 'month', category: null, cc: null, method: null, q: '' },
   reviewBase: 0,
   expanded: null,
@@ -183,33 +186,105 @@ function emptyState(emoji, title, text, button = '') {
 
 // ---------------------------------------------------------------- Inicio
 
-function sortedBudgets() {
+// Presupuestos con su estado en el período elegido: { b, s, closed }. Los que no aplican a ese período se omiten.
+function sortedBudgets(p = homePeriod()) {
   const main = state.costCenters[0]?.id;
   const rank = { over: 0, warn: 1, ok: 2 };
-  const withStats = state.budgets.map((b) => ({ b, s: budgetStats(b, state.expenses) }));
+  const withStats = state.budgets.map((b) => {
+    const res = budgetStatsFor(b, state.expenses, p);
+    return res ? { b, s: res.stats, closed: res.closed } : null;
+  }).filter(Boolean);
   const totals = withStats.filter(({ b }) => !b.categoryId).sort((a, b) => (a.b.costCenterId === main ? -1 : 0) - (b.b.costCenterId === main ? -1 : 0));
   const cats = withStats.filter(({ b }) => b.categoryId).sort((a, b) => rank[a.s.status] - rank[b.s.status] || b.s.projectedDelta - a.s.projectedDelta);
-  return [...totals, ...cats].map(({ b }) => b);
+  return [...totals, ...cats];
+}
+
+const homePeriod = () => view.period || periodOf('month');
+
+// Selector de período: ‹ noviembre › y, en el pasado, "Volver a hoy".
+function periodBarHTML(p) {
+  const current = isCurrent(p);
+  const first = firstExpenseDate(state.expenses);
+  const canPrev = !!first && periodRange(shiftPeriod(p, -1)).endISO > first;
+  return `<div class="period-bar ${current ? '' : 'past'}">
+    <button class="icon-btn sm period-arrow" data-action="period-step" data-d="-1" ${canPrev ? '' : 'disabled'} aria-label="Período anterior">${icon('back')}</button>
+    <button class="period-chip" data-action="period-pick" aria-label="Elegir período">${esc(current && p.mode === 'week' ? 'Esta semana' : periodLabel(p))}<span class="caret">▾</span></button>
+    <button class="icon-btn sm period-arrow" data-action="period-step" data-d="1" ${current ? 'disabled' : ''} aria-label="Período siguiente">${icon('chevron')}</button>
+    ${current ? '' : '<button class="chip back-today" data-action="period-today">Volver a hoy ↺</button>'}
+  </div>`;
+}
+
+function setPeriod(p) {
+  view.period = isCurrent(p) && p.mode === 'month' ? null : p;
+  rerender();
+}
+
+async function pickPeriod() {
+  const p = homePeriod();
+  const first = firstExpenseDate(state.expenses);
+  const exp = confirmed();
+  const options = [];
+  let q = periodOf(p.mode);
+  for (let i = 0; i < (p.mode === 'month' ? 24 : 26); i++) {
+    const r = periodRange(q);
+    if (i > 0 && (!first || r.endISO <= first)) break;
+    options.push({ value: q.start, label: i === 0 ? `${periodLabel(q)} · ${p.mode === 'month' ? 'este mes' : 'esta semana'}` : periodLabel(q), hint: money(sumIn(exp, r.startISO, r.endISO), undefined, { hero: true }) });
+    q = shiftPeriod(q, -1);
+  }
+  options.push({ value: '__mode', label: p.mode === 'month' ? 'Ver por semanas' : 'Ver por meses', emoji: '⇄' });
+  const v = await pick({ title: p.mode === 'month' ? 'Elige un mes' : 'Elige una semana', options, selected: p.start });
+  if (!v) return;
+  if (v === '__mode') { setPeriod(switchMode(p, p.mode === 'month' ? 'week' : 'month')); return; }
+  setPeriod({ mode: p.mode, start: v });
+}
+
+// Abre Gastos con los filtros del período elegido en Inicio (y uno extra: categoría, centro o comercio).
+function openExpensesFor(extra) {
+  const p = homePeriod();
+  const r = periodRange(p);
+  const base = { category: null, cc: null, method: null, q: '' };
+  const period = isCurrent(p) && p.mode === 'month' ? { period: 'month' } : { period: 'range', from: r.startISO, to: r.endISO, rangeLabel: periodLabel(p) };
+  view.filters = { ...view.filters, ...base, ...period, ...extra };
+  switchTab('expenses');
 }
 
 function renderHome() {
-  const today = new Date();
-  const pend = pending().length;
-  const last = state.lastBatchAt ? daysAgo(state.lastBatchAt) : null;
+  const p = homePeriod();
+  const r = periodRange(p);
+  const current = isCurrent(p);
+  const ctx = { p, r, cmp: compareRange(p) };
   const name = state.settings.name ? `, ${esc(state.settings.name)}` : '';
-  let html = topbar(`Hola${name} 👋`, {
-    overline: monthName(today),
+  const title = current ? `Hola${name} 👋` : p.mode === 'month' ? `Así cerró ${monthName(r.start)}` : 'Así fue esa semana';
+  let html = topbar(title, {
     action: `<button class="icon-btn ${view.update ? 'has-dot' : ''}" data-action="settings" aria-label="Ajustes${view.update ? ' · hay una versión nueva' : ''}">${icon('gear')}</button>`,
   });
-  if (pend > 0) html += `<button class="notice accent" data-action="tab" data-tab="review"><span>📥</span><span><b>${pend} ${pend === 1 ? 'movimiento' : 'movimientos'}</b> por revisar</span>${icon('chevron')}</button>`;
-  html += homeNoticeHTML();
+  html += periodBarHTML(p);
+  if (current) {
+    const pend = pending().length;
+    if (pend > 0) html += `<button class="notice accent" data-action="tab" data-tab="review"><span>📥</span><span><b>${pend} ${pend === 1 ? 'movimiento' : 'movimientos'}</b> por revisar</span>${icon('chevron')}</button>`;
+    html += homeNoticeHTML();
+  } else {
+    // En un período pasado, los pendientes de esas fechas aún no cuentan en los totales.
+    const pend = pending().filter((e) => e.date >= r.startISO && e.date < r.endISO).length;
+    if (pend > 0) html += `<button class="notice accent" data-action="tab" data-tab="review"><span>📥</span><span>Faltan <b>${pend} ${pend === 1 ? 'movimiento' : 'movimientos'}</b> por revisar de este período</span>${icon('chevron')}</button>`;
+  }
+  const label = periodLabel(p);
+  const sub = current ? (p.mode === 'month' ? label : 'esta semana') : label;
+  // Período pasado sin gastos: un solo aviso en lugar de varias tarjetas vacías.
+  const empty = !current && !sumIn(confirmed(), r.startISO, r.endISO);
   for (const w of state.dashboard) {
     if (!w.on) continue;
-    if (w.id === 'pace') html += paceCarousel();
-    if (w.id === 'categories') html += widget('Por categoría', categoryBars(), monthName(today));
-    if (w.id === 'trend') html += widget('Evolución', trendBars(view.trendMode));
-    if (w.id === 'costcenters') html += widget('Centros de costo', costCenterRows());
-    if (w.id === 'merchants') html += widget('Top comercios', topMerchants());
+    if (empty && w.id !== 'trend') continue;
+    if (w.id === 'pace') html += paceCarousel(p);
+    if (w.id === 'categories') html += widget('Por categoría', categoryBars(ctx), sub);
+    if (w.id === 'trend') html += widget('Evolución', trendBars(ctx));
+    if (w.id === 'costcenters') html += widget('Centros de costo', costCenterRows(ctx), sub);
+    if (w.id === 'merchants') html += widget('Top comercios', topMerchants(ctx), sub);
+  }
+  if (empty) {
+    html += `<section class="card widget empty-period"><div class="empty-emoji">🗓️</div><h3>Sin gastos en ${esc(label)}</h3>
+      <p>¿Importamos los movimientos de ese ${p.mode === 'month' ? 'mes' : 'período'}?</p>
+      <button class="btn primary" data-action="batch">Importar movimientos</button></section>`;
   }
   html += `<button class="link-btn" data-action="customize">Personalizar inicio</button>`;
   return html;
@@ -320,11 +395,16 @@ function widget(title, body, sub = '') {
   return `<section class="card widget"><header class="widget-head"><h2>${title}</h2>${sub ? `<span class="muted">${esc(sub)}</span>` : ''}</header>${body}</section>`;
 }
 
-function paceCarousel() {
-  const budgets = sortedBudgets();
-  if (!budgets.length) return ghostPace();
+// Estadísticas usadas por las tarjetas del carrusel (para el detalle al mantener presionado).
+const paceStats = new Map();
+
+function paceCarousel(p = homePeriod()) {
+  const budgets = sortedBudgets(p);
+  paceStats.clear();
+  if (!budgets.length) return isCurrent(p) && !state.budgets.length ? ghostPace() : '';
+  for (const { b, s } of budgets) paceStats.set(b.id, s);
   return `<section class="carousel-wrap" aria-label="Ritmo de presupuestos">
-    <div class="carousel" id="carousel">${budgets.map((b) => paceCard(b)).join('')}</div>
+    <div class="carousel" id="carousel">${budgets.map(({ b, s, closed }) => paceCard(b, { stats: s, closed })).join('')}</div>
     ${budgets.length > 1 ? `<div class="dots">${budgets.slice(0, 7).map((b, i) => `<button class="cdot ${i === 0 ? 'on' : ''}" data-action="car-go" data-i="${i}" aria-label="Presupuesto ${i + 1}"></button>`).join('')}</div>
     <button class="car-arrow prev" data-action="car-step" data-d="-1" aria-label="Anterior">${icon('back')}</button>
     <button class="car-arrow next" data-action="car-step" data-d="1" aria-label="Siguiente">${icon('chevron')}</button>` : ''}
@@ -337,7 +417,7 @@ function setupCarousel(screen) {
   const cards = [...car.querySelectorAll('.pace-card')];
   cards.forEach((card) => {
     const budget = state.budgets.find((b) => b.id === card.dataset.budget);
-    attachPaceTouch(card.querySelector('.pace-wrap'), budgetStats(budget, state.expenses));
+    attachPaceTouch(card.querySelector('.pace-wrap'), paceStats.get(budget.id) || budgetStats(budget, state.expenses));
     if (animated.has(card.dataset.budget)) card.classList.add('play', 'static');
     else prepareDraw(card);
     card.addEventListener('click', (e) => { if (!e.target.closest('svg')) openBudgetDetail(card.dataset.budget); });
@@ -386,7 +466,7 @@ const PERIOD_FILTERS = [
 function renderExpenses() {
   const f = view.filters;
   const chip = (key, label, value, active) => `<button class="chip filter ${active ? 'on' : ''}" data-action="filter" data-key="${key}">${esc(value || label)}${active && key !== 'period' ? `<span class="chip-x" data-action="filter-clear" data-key="${key}">${icon('x')}</span>` : ''}</button>`;
-  const periodLabel = PERIOD_FILTERS.find((p) => p.value === f.period).label;
+  const periodLabel = PERIOD_FILTERS.find((p) => p.value === f.period)?.label || f.rangeLabel || 'Período';
   return `${topbar('Gastos')}
     <div class="search-bar"><label class="search">${icon('search')}<input id="search" type="search" placeholder="Buscar comercio o descripción" value="${esc(f.q)}" autocomplete="off"></label>
       <div class="chip-row scroll">
@@ -407,6 +487,7 @@ function filteredExpenses() {
   if (f.period === 'month') { from = toISO(new Date(now.getFullYear(), now.getMonth(), 1)); to = toISO(new Date(now.getFullYear(), now.getMonth() + 1, 1)); }
   if (f.period === 'last') { from = toISO(new Date(now.getFullYear(), now.getMonth() - 1, 1)); to = toISO(new Date(now.getFullYear(), now.getMonth(), 1)); }
   if (f.period === '90') from = toISO(addDays(now, -90));
+  if (f.period === 'range') { from = f.from; to = f.to; }
   const q = f.q.trim().toLowerCase();
   return confirmed()
     .filter((e) => e.date >= from && e.date < to)
@@ -469,7 +550,7 @@ async function deleteExpense(id, rowEl) {
 async function chooseFilter(key) {
   const f = view.filters;
   let value;
-  if (key === 'period') value = await pick({ title: 'Período', options: PERIOD_FILTERS, selected: f.period });
+  if (key === 'period') value = await pick({ title: 'Período', options: f.period === 'range' ? [{ value: 'range', label: f.rangeLabel }, ...PERIOD_FILTERS] : PERIOD_FILTERS, selected: f.period });
   if (key === 'category') value = await pick({ title: 'Categoría', options: visibleCategories().map((c) => ({ value: c.id, label: c.name, emoji: c.emoji, color: c.color })), selected: f.category });
   if (key === 'cc') value = await pick({ title: 'Centro de costo', options: state.costCenters.map((c) => ({ value: c.id, label: c.name, emoji: c.emoji })), selected: f.cc });
   if (key === 'method') value = await pick({ title: 'Medio de pago', options: state.paymentMethods.map(methodOption), selected: f.method });
@@ -2188,10 +2269,21 @@ function onClick(e) {
     'open-budget': () => openBudgetDetail(id),
     'edit-expense': () => { const x = state.expenses.find((v) => v.id === id); if (x) openExpenseForm({ expense: x }); },
     'edit-pending': () => { const x = state.expenses.find((v) => v.id === id); if (x) openExpenseForm({ expense: x, uncertain: { categoryId: true } }); },
-    'trend-mode': () => { view.trendMode = el.dataset.mode; rerender(); },
+    'period-mode': () => setPeriod(switchMode(homePeriod(), el.dataset.mode)),
+    'period-step': () => setPeriod(shiftPeriod(homePeriod(), Number(el.dataset.d))),
+    'period-today': () => setPeriod(periodOf(homePeriod().mode)),
+    'period-pick': pickPeriod,
+    'period-set': () => {
+      const p = homePeriod();
+      const next = { mode: p.mode, start: el.dataset.start };
+      // Tocar de nuevo la barra elegida vuelve al período actual.
+      setPeriod(next.start === p.start ? periodOf(p.mode) : next);
+    },
+    'filter-cc': () => openExpensesFor({ cc: id }),
+    'filter-merchant': () => openExpensesFor({ q: el.dataset.name }),
     'car-go': () => carouselGo(Number(el.dataset.i)),
     'car-step': () => carouselStep(Number(el.dataset.d)),
-    'filter-category': () => { view.filters = { ...view.filters, category: id, period: 'month' }; switchTab('expenses'); },
+    'filter-category': () => openExpensesFor({ category: id }),
     filter: () => { if (!e.target.closest('[data-action="filter-clear"]')) chooseFilter(el.dataset.key); },
     'filter-clear': () => { e.stopPropagation(); view.filters[el.dataset.key] = null; rerender(); },
     confirm: () => confirmPending(id),

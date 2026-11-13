@@ -3,6 +3,29 @@
 Todos los cambios notables de este proyecto se documentan aquí.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/); versionado según [SemVer](https://semver.org/lang/es/).
 
+## [0.7.0] - 2026-11-13
+
+### Añadido
+- **Período en Inicio:** el selector `‹ noviembre ›` debajo del saludo cambia todo el tablero.
+  - Las flechas avanzan o retroceden un período. Al tocar el nombre se abre una lista con el total de cada mes o semana, y la opción de cambiar entre meses y semanas.
+  - En un período pasado, el título cambia a "Así cerró octubre", el selector se pinta de color y aparece **Volver a hoy ↺**.
+  - Al abrir la app siempre vuelve al período actual.
+- **Evolución interactiva:**
+  - Tocar una barra selecciona ese mes o semana; tocarla de nuevo vuelve a hoy.
+  - La barra elegida se resalta con su monto.
+  - El período actual se ve rayado y con "hoy", porque aún no termina.
+- **Presupuestos cerrados:** en un período pasado, cada tarjeta de Ritmo muestra cómo cerró el período del presupuesto: "✓ Cerró 42 % abajo" o "● Se pasó $741", y Gastado, Presupuesto y Diferencia.
+- **Comparaciones:**
+  - El total trae "▲ 12 % vs oct". En el período actual se compara al mismo día: "vs oct al día 13".
+  - Las categorías marcan cambios de 15 % o más.
+- **Ver el detalle:** tocar una categoría, un centro de costo o un comercio abre Gastos filtrado por ese período.
+- Un período pasado sin gastos muestra un solo aviso con "Importar movimientos".
+
+### Cambiado
+- Por categoría, Centros de costo y Top comercios usan el período elegido, que se indica en cada tarjeta. Antes cada uno usaba una ventana distinta: mes, período del presupuesto o últimos 30 días.
+- En un período pasado, se ocultan los centros de costo sin gastos.
+- La etiqueta del promedio en Evolución ya no queda tapada.
+
 ## [0.6.0] - 2026-11-13
 
 ### Añadido
