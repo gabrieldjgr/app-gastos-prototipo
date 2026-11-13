@@ -3,6 +3,19 @@
 Todos los cambios notables de este proyecto se documentan aquí.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/); versionado según [SemVer](https://semver.org/lang/es/).
 
+## [0.8.0] - 2026-11-13
+
+### Añadido
+- **Filtros de varios valores en Gastos.** Los filtros de **Tarjeta / medio**, **Centro** y **Categoría** permiten elegir varios a la vez; el chip muestra "TDC BBVA +1".
+  - Nueva opción **Sin medio de pago**, para encontrar gastos sin tarjeta asignada.
+  - El filtro de tarjetas incluye medios archivados o escritos a mano que aparecen en gastos.
+  - Con dos o más medios elegidos, el pie desglosa el total por medio.
+- **Modo selección en Gastos:** se entra con **Seleccionar** o manteniendo presionado un gasto.
+  - Toca gastos para marcarlos, el día para marcarlo completo, o **Todos** para marcar lo filtrado.
+  - La barra inferior muestra cuántos van y cuánto suman, con **Medio**, **Centro**, **Categoría** y **Eliminar** para todos a la vez. Todo con deshacer.
+  - Se sale con **Listo**, con el gesto atrás o al cambiar de pestaña.
+- Cada gasto muestra su medio de pago en la lista.
+
 ## [0.7.0] - 2026-11-13
 
 ### Añadido

@@ -444,6 +444,30 @@ small { font-size: 13px; }
 .row-amt small { font-size: 11px; color: var(--text-2); font-weight: 400; }
 .list-foot { text-align: center; color: var(--text-2); font-size: 13px; padding: 16px 0; }
 .list-foot b { color: var(--text); }
+.foot-break { display: block; margin-top: 6px; font-size: 12px; }
+.text-btn { height: 36px; padding: 0 12px; border-radius: 12px; color: var(--accent-text); font: 600 15px/1 var(--font); }
+.text-btn:active { background: var(--sunken); }
+.text-btn.strong { background: var(--accent-soft); }
+.top-actions { display: flex; gap: 4px; }
+.check-box { flex: none; width: 24px; height: 24px; border-radius: 999px; border: 2px solid var(--border); display: grid; place-items: center; background: var(--surface); transition: background .15s, border-color .15s; }
+.check-box.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.check-box .ico { width: 14px; height: 14px; stroke-width: 3; }
+.check-box.sm { width: 18px; height: 18px; }
+.check-box.sm .ico { width: 11px; height: 11px; }
+.pick-item .check-box { margin-left: auto; }
+.multi-actions { position: sticky; bottom: 0; background: var(--surface); padding-top: 12px; margin-top: 8px; }
+.row.selectable .swipe-content { transition: background .15s; user-select: none; }
+.row.selected .swipe-content { background: var(--accent-soft); }
+.row.swipe .swipe-content { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.day-select { display: inline-flex; align-items: center; gap: 8px; font: inherit; color: inherit; }
+.sel-bar { position: absolute; left: 12px; right: 12px; bottom: calc(72px + env(safe-area-inset-bottom)); z-index: 22; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 20px; background: var(--surface); box-shadow: var(--shadow-pop); border: 1px solid var(--border); animation: rise .25s var(--ease-out) both; }
+.sel-info { display: flex; justify-content: space-between; align-items: baseline; font-size: 14px; padding: 0 4px; }
+.sel-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.sel-actions button { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 4px; border-radius: 14px; background: var(--sunken); font: 600 12px/14px var(--font); color: var(--text); }
+.sel-actions button span { font-size: 18px; line-height: 22px; }
+.sel-actions button:disabled { opacity: .4; }
+.sel-actions button.danger { color: var(--over); }
+#exp-list.selecting { padding-bottom: 140px; }
 .list-card { padding: 4px; }
 .list-card .row + .row { margin-top: 0; border-top: 1px solid var(--border); border-radius: 0; }
 .list-card .row .swipe-content { border-radius: 12px; }

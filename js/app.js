@@ -18,7 +18,7 @@ import {
   topMerchants, progressWithNotch, heroMoney, paceSVG,
 } from './charts.js';
 import {
-  icon, openSheet, closeTopSheet, pick, confirmDialog, toast, confetti, swipeable, collapse, countUp, vibrate,
+  icon, openSheet, closeTopSheet, pick, multiPick, confirmDialog, toast, confetti, swipeable, collapse, countUp, vibrate,
 } from './ui.js';
 import { loadSampleData } from './sample.js';
 import {
@@ -37,7 +37,9 @@ const app = document.getElementById('app');
 const view = {
   tab: 'home',
   period: null, // período elegido en Inicio (null = el mes actual); no se guarda: al abrir la app vuelve a hoy
-  filters: { period: 'month', category: null, cc: null, method: null, q: '' },
+  filters: { period: 'month', cats: [], ccs: [], methods: [], q: '' }, // filtros de Gastos (varios valores por tipo)
+  selecting: false, // modo selección en Gastos
+  selected: new Set(),
   reviewBase: 0,
   expanded: null,
   openPlans: new Set(),
@@ -164,6 +166,7 @@ function afterRender(screen) {
 }
 
 function switchTab(tab) {
+  if (view.selecting && tab !== 'expenses') { view.selecting = false; view.selected.clear(); document.getElementById('sel-bar')?.remove(); }
   if (view.tab === tab) {
     document.getElementById('screen')?.scrollTo({ top: 0, behavior: 'smooth' });
     return;
@@ -242,7 +245,7 @@ async function pickPeriod() {
 function openExpensesFor(extra) {
   const p = homePeriod();
   const r = periodRange(p);
-  const base = { category: null, cc: null, method: null, q: '' };
+  const base = { cats: [], ccs: [], methods: [], q: '' };
   const period = isCurrent(p) && p.mode === 'month' ? { period: 'month' } : { period: 'range', from: r.startISO, to: r.endISO, rangeLabel: periodLabel(p) };
   view.filters = { ...view.filters, ...base, ...period, ...extra };
   switchTab('expenses');
@@ -367,7 +370,7 @@ async function noticeDo(key, act) {
     rerender();
     return;
   }
-  if (c.type === 'due' && act === 'view') { resolveNotice(key, 'acted'); view.filters = { ...view.filters, method: c.method.name, period: '90' }; switchTab('expenses'); }
+  if (c.type === 'due' && act === 'view') { resolveNotice(key, 'acted'); view.filters = { ...view.filters, cats: [], ccs: [], methods: [c.method.name], q: '', period: '90' }; switchTab('expenses'); }
   if (c.type === 'pace' && act === 'view') { resolveNotice(key, 'acted'); openBudgetDetail(c.budget.id); }
   if (c.type === 'period' && act === 'edit') { resolveNotice(key, 'done'); if (c.budget.groupId) openPlanEditor({ groupId: c.budget.groupId }); else openBudgetEditor(c.budget); }
   if (c.type === 'stale' && act === 'import') { resolveNotice(key, 'acted'); openBatch({ account: c.method?.name || '' }); }
@@ -463,17 +466,29 @@ const PERIOD_FILTERS = [
   { value: 'all', label: 'Todo' },
 ];
 
+const NO_METHOD = '__none'; // filtro "Sin medio de pago"
+
+// Texto de un chip con varios valores: "TDC BBVA" o "TDC BBVA +2".
+function multiLabel(values, nameOf) {
+  if (!values.length) return '';
+  return values.length === 1 ? nameOf(values[0]) : `${nameOf(values[0])} +${values.length - 1}`;
+}
+
 function renderExpenses() {
   const f = view.filters;
-  const chip = (key, label, value, active) => `<button class="chip filter ${active ? 'on' : ''}" data-action="filter" data-key="${key}">${esc(value || label)}${active && key !== 'period' ? `<span class="chip-x" data-action="filter-clear" data-key="${key}">${icon('x')}</span>` : ''}</button>`;
+  const chip = (key, label, value, active) => `<button class="chip filter ${active ? 'on' : ''}" data-action="filter" data-key="${key}">${esc(value || label)}${active && key !== 'period' ? `<span class="chip-x" data-action="filter-clear" data-key="${key}" aria-label="Quitar filtro">${icon('x')}</span>` : ''}</button>`;
   const periodLabel = PERIOD_FILTERS.find((p) => p.value === f.period)?.label || f.rangeLabel || 'Período';
-  return `${topbar('Gastos')}
+  const methodName = (v) => (v === NO_METHOD ? 'Sin medio' : v);
+  const action = view.selecting
+    ? `<div class="top-actions"><button class="text-btn" data-action="select-all">Todos</button><button class="text-btn strong" data-action="select-mode">Listo</button></div>`
+    : `<button class="text-btn" data-action="select-mode">Seleccionar</button>`;
+  return `${topbar(view.selecting ? 'Seleccionar' : 'Gastos', { action })}
     <div class="search-bar"><label class="search">${icon('search')}<input id="search" type="search" placeholder="Buscar comercio o descripción" value="${esc(f.q)}" autocomplete="off"></label>
       <div class="chip-row scroll">
         ${chip('period', 'Período', periodLabel, true)}
-        ${chip('category', 'Categoría', f.category ? categoryById(f.category).name : '', !!f.category)}
-        ${chip('cc', 'Centro', f.cc ? costCenterById(f.cc).name : '', !!f.cc)}
-        ${chip('method', 'Medio', f.method || '', !!f.method)}
+        ${chip('methods', 'Tarjeta / medio', multiLabel(f.methods, methodName), f.methods.length > 0)}
+        ${chip('ccs', 'Centro', multiLabel(f.ccs, (id) => costCenterById(id)?.name || '?'), f.ccs.length > 0)}
+        ${chip('cats', 'Categoría', multiLabel(f.cats, (id) => categoryById(id).name), f.cats.length > 0)}
       </div>
     </div>
     <div id="exp-list"></div>`;
@@ -491,9 +506,9 @@ function filteredExpenses() {
   const q = f.q.trim().toLowerCase();
   return confirmed()
     .filter((e) => e.date >= from && e.date < to)
-    .filter((e) => !f.category || e.categoryId === f.category)
-    .filter((e) => !f.cc || e.costCenterId === f.cc)
-    .filter((e) => !f.method || e.paymentMethod === f.method)
+    .filter((e) => !f.cats.length || f.cats.includes(e.categoryId))
+    .filter((e) => !f.ccs.length || f.ccs.includes(e.costCenterId))
+    .filter((e) => !f.methods.length || f.methods.includes(e.paymentMethod || NO_METHOD))
     .filter((e) => !q || `${e.merchant} ${e.description}`.toLowerCase().includes(q))
     .sort((a, b) => (b.date.localeCompare(a.date)) || (b.createdAt - a.createdAt));
 }
@@ -514,28 +529,181 @@ function renderExpenseList() {
     groups.get(e.date).push(e);
   }
   let html = '';
+  // Al cambiar filtros, la selección se queda solo con lo que sigue visible.
+  if (view.selecting) {
+    const visible = new Set(list.map((e) => e.id));
+    for (const id of [...view.selected]) if (!visible.has(id)) view.selected.delete(id);
+  }
   for (const [date, items] of groups) {
     const total = items.reduce((s, e) => s + e.amountBase, 0);
-    html += `<section class="day-group"><h3 class="day-head"><span>${dayHeader(date)}</span><span class="num">${money(total)}</span></h3>
+    const allOn = view.selecting && items.every((e) => view.selected.has(e.id));
+    html += `<section class="day-group"><h3 class="day-head">${view.selecting
+      ? `<button class="day-select" data-action="select-day" data-date="${date}"><span class="check-box sm ${allOn ? 'on' : ''}">${allOn ? icon('check') : ''}</span>${dayHeader(date)}</button>`
+      : `<span>${dayHeader(date)}</span>`}<span class="num">${money(total)}</span></h3>
       ${items.map(expenseRow).join('')}</section>`;
   }
   const total = list.reduce((s, e) => s + e.amountBase, 0);
-  html += `<p class="list-foot">${list.length} ${list.length === 1 ? 'gasto' : 'gastos'} · <b class="num">${money(total)}</b></p>`;
+  html += `<p class="list-foot">${list.length} ${list.length === 1 ? 'gasto' : 'gastos'} · <b class="num">${money(total)}</b>${methodBreakdown(list)}</p>`;
   host.innerHTML = html;
-  host.querySelectorAll('.row.swipe').forEach((row) => {
-    swipeable(row, { onLeft: () => deleteExpense(row.dataset.id, row) });
+  host.classList.toggle('selecting', view.selecting);
+  if (!view.selecting) {
+    host.querySelectorAll('.row.swipe').forEach((row) => {
+      swipeable(row, { onLeft: () => deleteExpense(row.dataset.id, row) });
+      onLongPress(row, () => startSelection(row.dataset.id));
+    });
+  }
+  updateSelectionBar();
+}
+
+// Con varios medios filtrados, el pie desglosa el total por medio.
+function methodBreakdown(list) {
+  if (view.filters.methods.length < 2) return '';
+  const by = new Map();
+  for (const e of list) by.set(e.paymentMethod || 'Sin medio', (by.get(e.paymentMethod || 'Sin medio') || 0) + e.amountBase);
+  return `<span class="foot-break">${[...by.entries()].sort((a, b) => b[1] - a[1]).map(([n, v]) => `${esc(n)}: <b class="num">${money(v, undefined, { hero: true })}</b>`).join(' · ')}</span>`;
+}
+
+// Mantener presionado un gasto entra al modo selección (sin interferir con el deslizamiento).
+function onLongPress(el, fn) {
+  let timer = null;
+  let x0 = 0;
+  let y0 = 0;
+  el.addEventListener('pointerdown', (e) => {
+    x0 = e.clientX; y0 = e.clientY;
+    clearTimeout(timer);
+    timer = setTimeout(() => { view.suppressClick = true; vibrate(15); fn(); }, 480);
   });
+  el.addEventListener('pointermove', (e) => { if (Math.abs(e.clientX - x0) > 8 || Math.abs(e.clientY - y0) > 8) clearTimeout(timer); });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach((ev) => el.addEventListener(ev, () => clearTimeout(timer)));
+  el.addEventListener('contextmenu', (e) => e.preventDefault());
+}
+
+// ---------------------------------------------------------------- Selección y cambios en lote
+
+function startSelection(firstId) {
+  view.selecting = true;
+  view.selected = new Set(firstId ? [firstId] : []);
+  armGuard();
+  rerender();
+}
+
+function exitSelection() {
+  view.selecting = false;
+  view.selected.clear();
+  document.getElementById('sel-bar')?.remove();
+  if (view.tab === 'expenses') rerender();
+}
+
+function toggleSelected(id) {
+  if (view.selected.has(id)) view.selected.delete(id); else view.selected.add(id);
+  const row = document.querySelector(`#exp-list .row[data-id="${id}"]`);
+  if (row) {
+    const on = view.selected.has(id);
+    row.classList.toggle('selected', on);
+    row.querySelector('.check-box').classList.toggle('on', on);
+    row.querySelector('.check-box').innerHTML = on ? icon('check') : '';
+  }
+  renderExpenseList();
+}
+
+function toggleDay(date) {
+  const items = filteredExpenses().filter((e) => e.date === date);
+  const allOn = items.every((e) => view.selected.has(e.id));
+  for (const e of items) { if (allOn) view.selected.delete(e.id); else view.selected.add(e.id); }
+  renderExpenseList();
+}
+
+function selectAllVisible() {
+  const list = filteredExpenses();
+  const allOn = list.length && list.every((e) => view.selected.has(e.id));
+  view.selected = new Set(allOn ? [] : list.map((e) => e.id));
+  renderExpenseList();
+}
+
+function selectedExpenses() {
+  return state.expenses.filter((e) => view.selected.has(e.id));
+}
+
+// Barra inferior del modo selección: cuántos, cuánto suman y las acciones en lote.
+function updateSelectionBar() {
+  let bar = document.getElementById('sel-bar');
+  if (!view.selecting || view.tab !== 'expenses') { bar?.remove(); return; }
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'sel-bar';
+    bar.className = 'sel-bar';
+    document.getElementById('app').appendChild(bar);
+  }
+  const sel = selectedExpenses();
+  const n = sel.length;
+  const total = sel.reduce((s, e) => s + e.amountBase, 0);
+  const title = document.querySelector('#screen .topbar h1');
+  if (title) title.textContent = n ? `${n} ${n === 1 ? 'seleccionado' : 'seleccionados'}` : 'Seleccionar';
+  bar.innerHTML = `<div class="sel-info">${n ? `<b>${n} ${n === 1 ? 'gasto' : 'gastos'}</b><span class="num">${money(total)}</span>` : '<span class="muted">Toca los gastos que quieras cambiar</span>'}</div>
+    <div class="sel-actions">
+      <button data-action="bulk" data-do="method" ${n ? '' : 'disabled'}><span>💳</span>Medio</button>
+      <button data-action="bulk" data-do="cc" ${n ? '' : 'disabled'}><span>📁</span>Centro</button>
+      <button data-action="bulk" data-do="cat" ${n ? '' : 'disabled'}><span>🏷️</span>Categoría</button>
+      <button data-action="bulk" data-do="del" class="danger" ${n ? '' : 'disabled'}><span>🗑️</span>Eliminar</button>
+    </div>`;
+}
+
+async function bulkAction(kind) {
+  const sel = selectedExpenses();
+  if (!sel.length) return;
+  const n = sel.length;
+  const plural = `${n} ${n === 1 ? 'gasto' : 'gastos'}`;
+  const common = (field) => { const s = new Set(sel.map((e) => e[field] || '')); return s.size === 1 ? [...s][0] : null; };
+  if (kind === 'del') {
+    if (!(await confirmDialog({ title: `Eliminar ${plural}`, text: `Se eliminarán ${plural} por ${money(sel.reduce((s, e) => s + e.amountBase, 0))}. Podrás deshacerlo justo después.`, confirmText: 'Eliminar', danger: true }))) return;
+    const removed = sel.map((e) => ({ e, i: state.expenses.indexOf(e) }));
+    state.expenses = state.expenses.filter((e) => !view.selected.has(e.id));
+    exitSelection();
+    save();
+    toast(`${plural} eliminados`, { undo: () => { for (const { e, i } of removed.sort((a, b) => a.i - b.i)) state.expenses.splice(Math.min(i, state.expenses.length), 0, e); save(); } });
+    return;
+  }
+  let field;
+  let value;
+  let label;
+  if (kind === 'method') {
+    value = await pickMethod({ title: `Medio de pago para ${plural}`, selected: common('paymentMethod') });
+    if (value === undefined || value === null) return;
+    field = 'paymentMethod';
+    label = value || 'Sin especificar';
+  }
+  if (kind === 'cc') {
+    value = await pick({ title: `Centro de costo para ${plural}`, options: state.costCenters.map((c) => ({ value: c.id, label: c.name, emoji: c.emoji })), selected: common('costCenterId') });
+    if (!value) return;
+    field = 'costCenterId';
+    label = costCenterById(value)?.name;
+  }
+  if (kind === 'cat') {
+    value = await pick({ title: `Categoría para ${plural}`, options: visibleCategories().map((c) => ({ value: c.id, label: c.name, emoji: c.emoji, color: c.color })), selected: common('categoryId') });
+    if (!value) return;
+    field = 'categoryId';
+    label = categoryById(value).name;
+  }
+  if (!field) return;
+  const before = sel.map((e) => [e, e[field]]);
+  for (const e of sel) e[field] = value;
+  exitSelection();
+  save();
+  toast(`${label} en ${plural}`, { undo: () => { for (const [e, v] of before) e[field] = v; save(); } });
 }
 
 function expenseRow(e) {
   const c = categoryById(e.categoryId);
   const cc = costCenterById(e.costCenterId);
   const foreign = e.currency !== state.settings.currency;
-  return `<div class="row swipe" data-id="${e.id}">
-    <div class="swipe-bg left">${icon('trash')}<span>Eliminar</span></div>
-    <div class="swipe-content" data-action="edit-expense" data-id="${e.id}">
+  const sel = view.selecting;
+  const on = sel && view.selected.has(e.id);
+  return `<div class="row ${sel ? 'selectable' : 'swipe'} ${on ? 'selected' : ''}" data-id="${e.id}">
+    ${sel ? '' : `<div class="swipe-bg left">${icon('trash')}<span>Eliminar</span></div>`}
+    <div class="swipe-content" data-action="${sel ? 'toggle-select' : 'edit-expense'}" data-id="${e.id}">
+      ${sel ? `<span class="check-box ${on ? 'on' : ''}">${on ? icon('check') : ''}</span>` : ''}
       <span class="avatar" style="--cat:var(--c${c.color})">${c.emoji}</span>
-      <span class="row-main"><span class="row-title">${esc(e.merchant || e.description || 'Gasto')}${isRecurring(e) ? ' <span class="rec-badge" title="Cargo recurrente">🔁</span>' : ''}</span><span class="row-sub">${esc(c.name)} · ${esc(cc?.name || '')}</span></span>
+      <span class="row-main"><span class="row-title">${esc(e.merchant || e.description || 'Gasto')}${isRecurring(e) ? ' <span class="rec-badge" title="Cargo recurrente">🔁</span>' : ''}</span><span class="row-sub">${esc(c.name)} · ${esc(cc?.name || '')}${e.paymentMethod ? ` · ${esc(e.paymentMethod)}` : ''}</span></span>
       <span class="row-amt"><span class="num">${money(e.amountBase)}</span>${foreign ? `<small>${money(e.amount, e.currency)}</small>` : ''}</span>
     </div>
   </div>`;
@@ -551,9 +719,15 @@ async function chooseFilter(key) {
   const f = view.filters;
   let value;
   if (key === 'period') value = await pick({ title: 'Período', options: f.period === 'range' ? [{ value: 'range', label: f.rangeLabel }, ...PERIOD_FILTERS] : PERIOD_FILTERS, selected: f.period });
-  if (key === 'category') value = await pick({ title: 'Categoría', options: visibleCategories().map((c) => ({ value: c.id, label: c.name, emoji: c.emoji, color: c.color })), selected: f.category });
-  if (key === 'cc') value = await pick({ title: 'Centro de costo', options: state.costCenters.map((c) => ({ value: c.id, label: c.name, emoji: c.emoji })), selected: f.cc });
-  if (key === 'method') value = await pick({ title: 'Medio de pago', options: state.paymentMethods.map(methodOption), selected: f.method });
+  if (key === 'cats') value = await multiPick({ title: 'Categorías', options: visibleCategories().map((c) => ({ value: c.id, label: c.name, emoji: c.emoji, color: c.color })), selected: f.cats });
+  if (key === 'ccs') value = await multiPick({ title: 'Centros de costo', options: state.costCenters.map((c) => ({ value: c.id, label: c.name, emoji: c.emoji })), selected: f.ccs });
+  if (key === 'methods') {
+    // Incluye medios archivados y nombres sueltos que aparecen en gastos, más "Sin medio de pago".
+    const names = new Set(state.paymentMethods.map((m) => m.name));
+    const loose = [...new Set(state.expenses.map((e) => e.paymentMethod).filter((n) => n && !names.has(n)))];
+    const options = [...state.paymentMethods.map(methodOption), ...loose.map((n) => ({ value: n, label: n, emoji: '💳', color: 6, hint: 'No está en tus medios de pago' })), { value: NO_METHOD, label: 'Sin medio de pago', emoji: '❔', color: 11, hint: 'Gastos sin tarjeta asignada' }];
+    value = await multiPick({ title: 'Tarjetas y medios de pago', options, selected: f.methods });
+  }
   if (value === undefined) return;
   f[key] = value;
   rerender();
@@ -2239,6 +2413,7 @@ function setupBackGuard() {
       return;
     }
     if (closeTopSheet()) { armGuard(); return; }
+    if (view.selecting) { exitSelection(); armGuard(); return; }
     if (state.onboarded && view.tab !== 'home') { switchTab('home'); armGuard(); return; }
     if (state.settings.confirmExit === false || Date.now() - lastBackAt < 2500) {
       allowLeave = true;
@@ -2267,7 +2442,11 @@ function onClick(e) {
     'new-plan': () => openPlanEditor(),
     'toggle-plan': () => { if (view.openPlans.has(id)) view.openPlans.delete(id); else view.openPlans.add(id); rerender(); },
     'open-budget': () => openBudgetDetail(id),
-    'edit-expense': () => { const x = state.expenses.find((v) => v.id === id); if (x) openExpenseForm({ expense: x }); },
+    'edit-expense': () => {
+      if (view.suppressClick) { view.suppressClick = false; return; }
+      const x = state.expenses.find((v) => v.id === id);
+      if (x) openExpenseForm({ expense: x });
+    },
     'edit-pending': () => { const x = state.expenses.find((v) => v.id === id); if (x) openExpenseForm({ expense: x, uncertain: { categoryId: true } }); },
     'period-mode': () => setPeriod(switchMode(homePeriod(), el.dataset.mode)),
     'period-step': () => setPeriod(shiftPeriod(homePeriod(), Number(el.dataset.d))),
@@ -2279,13 +2458,18 @@ function onClick(e) {
       // Tocar de nuevo la barra elegida vuelve al período actual.
       setPeriod(next.start === p.start ? periodOf(p.mode) : next);
     },
-    'filter-cc': () => openExpensesFor({ cc: id }),
+    'filter-cc': () => openExpensesFor({ ccs: [id] }),
     'filter-merchant': () => openExpensesFor({ q: el.dataset.name }),
     'car-go': () => carouselGo(Number(el.dataset.i)),
     'car-step': () => carouselStep(Number(el.dataset.d)),
-    'filter-category': () => openExpensesFor({ category: id }),
+    'filter-category': () => openExpensesFor({ cats: [id] }),
     filter: () => { if (!e.target.closest('[data-action="filter-clear"]')) chooseFilter(el.dataset.key); },
-    'filter-clear': () => { e.stopPropagation(); view.filters[el.dataset.key] = null; rerender(); },
+    'filter-clear': () => { e.stopPropagation(); view.filters[el.dataset.key] = []; rerender(); },
+    'select-mode': () => (view.selecting ? exitSelection() : startSelection()),
+    'select-all': selectAllVisible,
+    'toggle-select': () => toggleSelected(id),
+    'select-day': () => toggleDay(el.dataset.date),
+    bulk: () => bulkAction(el.dataset.do),
     confirm: () => confirmPending(id),
     discard: () => discardPending(id),
     answer: () => { updateExpense(id, { categoryId: el.dataset.cat }); confirmPending(id); },
@@ -2304,7 +2488,7 @@ function onClick(e) {
 }
 
 function onKey(e) {
-  if (e.key === 'Escape') { closeTopSheet(); return; }
+  if (e.key === 'Escape') { if (!closeTopSheet() && view.selecting) exitSelection(); return; }
   if (document.querySelector('.sheet-layer') || e.target.matches('input, textarea, select')) return;
   if (view.tab === 'home' && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) carouselStep(e.key === 'ArrowRight' ? 1 : -1);
 }

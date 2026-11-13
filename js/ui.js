@@ -95,6 +95,36 @@ export function pick({ title, options, selected }) {
   });
 }
 
+// Selector de varias opciones. Devuelve el arreglo elegido, o undefined si se cerró sin aplicar.
+export function multiPick({ title, options, selected = [] }) {
+  return new Promise((resolve) => {
+    let result;
+    const chosen = new Set(selected);
+    const sheet = openSheet({ title, body: '', onClose: () => resolve(result) });
+    const draw = () => {
+      sheet.setBody(`<ul class="pick-list">${options.map((o, i) => `<li><button class="pick-item ${chosen.has(o.value) ? 'on' : ''}" data-i="${i}" aria-pressed="${chosen.has(o.value)}">
+        ${o.emoji ? `<span class="avatar sm" style="--cat:var(--c${o.color ?? 6})">${o.emoji}</span>` : ''}
+        <span class="pick-label">${esc(o.label)}${o.hint ? `<small>${esc(o.hint)}</small>` : ''}</span>
+        <span class="check-box ${chosen.has(o.value) ? 'on' : ''}">${chosen.has(o.value) ? icon('check') : ''}</span></button></li>`).join('')}</ul>
+        <div class="btn-row multi-actions"><button class="btn ghost" data-m="clear" ${chosen.size ? '' : 'disabled'}>Quitar filtro</button>
+        <button class="btn primary" data-m="apply">${chosen.size ? `Aplicar (${chosen.size})` : 'Ver todos'}</button></div>`);
+    };
+    sheet.body.addEventListener('click', (e) => {
+      const b = e.target.closest('.pick-item');
+      if (b) {
+        const v = options[Number(b.dataset.i)].value;
+        if (chosen.has(v)) chosen.delete(v); else chosen.add(v);
+        draw();
+        return;
+      }
+      const m = e.target.closest('[data-m]')?.dataset.m;
+      if (m === 'clear') { chosen.clear(); draw(); }
+      if (m === 'apply') { result = [...chosen]; sheet.close(); }
+    });
+    draw();
+  });
+}
+
 export function confirmDialog({ title, text, confirmText = 'Confirmar', danger = false, requireText = '' }) {
   return new Promise((resolve) => {
     let ok = false;
