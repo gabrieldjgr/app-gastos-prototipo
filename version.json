@@ -1,8 +1,1 @@
-{
-  "version": "0.5.0",
-  "date": "2026-11-12",
-  "notes": [
-    "Botón para buscar actualizaciones en Ajustes",
-    "El gesto atrás cierra ventanas y pide confirmar antes de salir"
-  ]
-}
+{"version":"0.5.1","date":"2026-11-12","notes":["Si la IA está saturada, la app reintenta sola y prueba con otro modelo","Ya no se queda cargando para siempre: se cancela a los 90 segundos con un aviso claro"]}

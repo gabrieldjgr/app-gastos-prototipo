@@ -3,6 +3,15 @@
 Todos los cambios notables de este proyecto se documentan aquí.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/); versionado según [SemVer](https://semver.org/lang/es/).
 
+## [0.5.1] - 2026-11-12
+
+### Corregido
+- Error "Error de Gemini (503): This model is currently experiencing high demand". Viene de los servidores del proveedor, no de la clave.
+  - La app reintenta sola 2 veces (a los 3 y a los 8 segundos) y muestra el avance.
+  - Si sigue saturado, lee una vez con otro modelo disponible para tu clave y te avisa. Tu modelo elegido no cambia.
+  - Si todo falla, el mensaje explica en español que es saturación del proveedor.
+- La lectura con IA se quedaba "procesando" para siempre si el proveedor no respondía. Ahora se cancela a los 90 segundos con un aviso claro. Aplica a Claude, Gemini y OpenAI.
+
 ## [0.5.0] - 2026-11-12
 
 ### Añadido

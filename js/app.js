@@ -1300,7 +1300,7 @@ function openReceipt() {
         },
         uncertain: low ? { categoryId: true } : {},
       });
-      if (result.modelChanged) toast(`Cambié a ${result.modelChanged.to}: “${result.modelChanged.from}” ya no está disponible.`);
+      if (result.modelChanged) toast(modelChangedMsg(result.modelChanged));
       else if (mov.pregunta) toast(mov.pregunta);
     } catch (err) {
       console.error(err);
@@ -1401,7 +1401,7 @@ function openBatch({ account: preset = '' } = {}) {
       sheet.close();
       view.reviewBase = pending().length;
       switchTab('review');
-      if (result.modelChanged) toast(`Cambié a ${result.modelChanged.to}: “${result.modelChanged.from}” ya no está disponible.`);
+      if (result.modelChanged) toast(modelChangedMsg(result.modelChanged));
       else if (result.nota) toast(result.nota);
     } catch (err) {
       console.error(err);
@@ -1857,6 +1857,13 @@ function openCustomize() {
     save();
   });
   draw();
+}
+
+// Aviso cuando la lectura usó otro modelo: permanente si el anterior fue retirado, solo esta vez si estaba saturado.
+function modelChangedMsg(c) {
+  return c.reason === 'busy'
+    ? `“${c.from}” estaba saturado: esta vez leí con ${c.to}.`
+    : `Cambié a ${c.to}: “${c.from}” ya no está disponible.`;
 }
 
 // ---------------------------------------------------------------- Actualizaciones

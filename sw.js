@@ -1,5 +1,5 @@
 // Service worker: la app funciona sin conexión (excepto la lectura con IA).
-const VERSION = 'ritmo-v0.5.0';
+const VERSION = 'ritmo-v0.5.1';
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/styles.css',
   './js/app.js', './js/store.js', './js/data.js', './js/format.js', './js/budget.js',

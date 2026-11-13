@@ -186,6 +186,34 @@ export class AiError extends Error {}
 // El modelo elegido ya no existe o no está disponible para la clave.
 class ModelGone extends AiError {}
 
+// Falla temporal del proveedor (servidores saturados o sin respuesta a tiempo). timeout = true si no respondió.
+class Busy extends AiError {
+  constructor(message, { timeout = false } = {}) { super(message); this.timeout = timeout; }
+}
+
+// Tiempo máximo de espera por intento de lectura.
+const AI_TIMEOUT_MS = 90000;
+// Esperas antes de cada reintento cuando el proveedor está saturado.
+const RETRY_WAITS_MS = [3000, 8000];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const busyMessage = (name) => `Los servidores de ${name} están saturados en este momento. No es un problema de tu clave: intenta en unos minutos o elige otro modelo en Ajustes → Modelo.`;
+const timeoutMessage = () => `La IA tardó demasiado en responder (más de ${AI_TIMEOUT_MS / 1000} s). Intenta de nuevo; si pasa seguido, sube menos archivos a la vez o elige otro modelo.`;
+
+// Reintenta solo las saturaciones (no los tiempos agotados, que ya costaron 90 s).
+async function runWithRetry(run, req, onStep, name) {
+  for (let i = 0; ; i++) {
+    try {
+      return await run(req);
+    } catch (err) {
+      if (!(err instanceof Busy) || err.timeout || i >= RETRY_WAITS_MS.length) throw err;
+      onStep(`${name} está saturado. Reintento ${i + 1} de ${RETRY_WAITS_MS.length} en ${RETRY_WAITS_MS[i] / 1000} s…`);
+      await sleep(RETRY_WAITS_MS[i]);
+      onStep(`Leyendo con ${name}…`);
+    }
+  }
+}
+
 // ---------------------------------------------------------------- Entrada principal
 
 // Envía los archivos a la IA elegida y devuelve { movimientos, nota }.
@@ -203,19 +231,31 @@ export async function extractWithAI(files, mode, onStep = () => {}, { account = 
   let text;
   let modelChanged = null;
   try {
-    text = await run(req);
+    text = await runWithRetry(run, req, onStep, p.name);
   } catch (err) {
-    if (!(err instanceof ModelGone)) throw err;
-    // El modelo fue retirado: se busca el mejor disponible para esta clave y se reintenta una vez.
-    onStep(`El modelo ${req.model} ya no está disponible. Buscando otro…`);
+    const gone = err instanceof ModelGone;
+    // Tras un tiempo agotado no se prueba otro modelo: serían otros 90 s de espera.
+    if (!gone && !(err instanceof Busy && !err.timeout)) throw err;
+    // Modelo retirado o saturado: se prueba una vez con otro modelo disponible para esta clave.
+    onStep(gone ? `El modelo ${req.model} ya no está disponible. Buscando otro…` : `${p.name} sigue sin responder. Probando con otro modelo…`);
     const models = await listModels(p.id).catch(() => []);
-    const best = models.find((m) => m.id !== req.model);
+    const others = models.filter((m) => m.id !== req.model);
+    // Ante saturación se prefiere un modelo que no sea "pro" (tienen límites más bajos).
+    const best = gone ? others[0] : (others.find((m) => !/pro/.test(m.id)) || others[0]);
     if (!best) throw err;
-    state.settings.models = { ...state.settings.models, [p.id]: best.id };
-    save();
-    modelChanged = { from: req.model, to: best.name };
+    if (gone) {
+      // Retirado: el cambio queda guardado. Saturado: solo por esta vez.
+      state.settings.models = { ...state.settings.models, [p.id]: best.id };
+      save();
+    }
+    modelChanged = { from: req.model, to: best.name, reason: gone ? 'gone' : 'busy' };
     onStep(`Leyendo con ${best.name}…`);
-    text = await run({ ...req, model: best.id });
+    try {
+      text = await run({ ...req, model: best.id });
+    } catch (err2) {
+      // Si el respaldo también está saturado, se muestra el mensaje original.
+      throw err2 instanceof Busy ? err : err2;
+    }
   }
   let result;
   try {
@@ -235,7 +275,8 @@ export async function extractWithAI(files, mode, onStep = () => {}, { account = 
 
 async function viaAnthropic({ system, parts, ask, model, key }) {
   const { default: Anthropic } = await import(ANTHROPIC_SDK_URL);
-  const client = new Anthropic({ apiKey: key, dangerouslyAllowBrowser: true });
+  // Los reintentos los maneja runWithRetry, para mostrar el avance en pantalla.
+  const client = new Anthropic({ apiKey: key, dangerouslyAllowBrowser: true, timeout: AI_TIMEOUT_MS, maxRetries: 0 });
   const content = parts.map((x) => (x.kind === 'image'
     ? { type: 'image', source: { type: 'base64', media_type: x.mime, data: x.data } }
     : x.kind === 'pdf'
@@ -263,7 +304,9 @@ async function viaAnthropic({ system, parts, ask, model, key }) {
     if (err instanceof Anthropic.PermissionDeniedError) throw new AiError('Tu clave no tiene permiso para este modelo.');
     if (err instanceof Anthropic.RateLimitError) throw new AiError('Demasiadas solicitudes seguidas. Espera un momento y vuelve a intentar.');
     if (err instanceof Anthropic.BadRequestError) throw new AiError(`La solicitud no fue aceptada: ${err.message}`);
+    if (err instanceof Anthropic.APIConnectionTimeoutError) throw new Busy(timeoutMessage(), { timeout: true });
     if (err instanceof Anthropic.APIConnectionError) throw new AiError('Sin conexión con el servicio de IA.');
+    if (err instanceof Anthropic.APIError && err.status >= 500) throw new Busy(busyMessage('Claude'));
     if (err instanceof Anthropic.APIError) throw new AiError(`Error del servicio de IA (${err.status ?? 'sin código'}).`);
     throw err;
   }
@@ -301,7 +344,7 @@ async function viaGemini({ system, parts, ask, model, key }) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
     body: JSON.stringify(body),
-  });
+  }, AI_TIMEOUT_MS);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const msg = data.error?.message || '';
@@ -309,6 +352,7 @@ async function viaGemini({ system, parts, ask, model, key }) {
     if (res.status === 403) throw new AiError('Tu clave de Google no tiene permiso para este modelo.');
     if (res.status === 404) throw new ModelGone(`El modelo “${model}” no está disponible para tu clave${msg ? ` (${msg})` : ''}. Elige otro en Ajustes → Modelo.`);
     if (res.status === 429) throw new AiError('Llegaste al límite de uso de Gemini (el nivel gratuito tiene un tope por minuto y por día). Espera un poco.');
+    if (res.status >= 500) throw new Busy(busyMessage('Gemini'));
     throw new AiError(`Error de Gemini (${res.status})${msg ? `: ${msg}` : ''}`);
   }
   if (data.promptFeedback?.blockReason) throw new AiError('Gemini no pudo procesar este contenido.');
@@ -337,13 +381,14 @@ async function viaOpenAI({ system, parts, ask, model, key }) {
       response_format: { type: 'json_schema', json_schema: { name: 'movimientos', strict: true, schema: schema() } },
       max_completion_tokens: 16000,
     }),
-  });
+  }, AI_TIMEOUT_MS);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const msg = data.error?.message || '';
     if (res.status === 401) throw new AiError('La clave de OpenAI no es válida. Revísala en Ajustes.');
     if (res.status === 403) throw new AiError('Tu clave de OpenAI no tiene permiso para este modelo.');
     if (res.status === 404 || data.error?.code === 'model_not_found') throw new ModelGone(`El modelo “${model}” no está disponible para tu clave. Elige otro en Ajustes → Modelo.`);
+    if (res.status >= 500) throw new Busy(busyMessage('OpenAI'));
     if (res.status === 429) throw new AiError(data.error?.code === 'insufficient_quota' ? 'Tu cuenta de OpenAI no tiene saldo.' : 'Demasiadas solicitudes seguidas. Espera un momento.');
     throw new AiError(`Error de OpenAI (${res.status})${msg ? `: ${msg}` : ''}`);
   }
@@ -447,11 +492,27 @@ export async function testConnection(providerId) {
   throw new AiError(`Error ${res.status}`);
 }
 
-async function safeFetch(url, opts) {
+// fetch con tiempo límite opcional: si se agota, lanza Busy (timeout) en vez de quedarse esperando.
+async function safeFetch(url, opts, timeoutMs = 0) {
+  if (!timeoutMs) {
+    try {
+      return await fetch(url, opts);
+    } catch {
+      throw new AiError('Sin conexión con el servicio de IA.');
+    }
+  }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    return await fetch(url, opts);
+    const res = await fetch(url, { ...opts, signal: ctrl.signal });
+    // El cuerpo también se lee dentro del tiempo límite.
+    const body = await res.text();
+    return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
   } catch {
+    if (ctrl.signal.aborted) throw new Busy(timeoutMessage(), { timeout: true });
     throw new AiError('Sin conexión con el servicio de IA.');
+  } finally {
+    clearTimeout(timer);
   }
 }
 
