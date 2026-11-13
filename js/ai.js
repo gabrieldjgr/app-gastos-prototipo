@@ -191,6 +191,12 @@ class Busy extends AiError {
   constructor(message, { timeout = false } = {}) { super(message); this.timeout = timeout; }
 }
 
+// Cupo de uso agotado (429). No se reintenta, pero se puede probar otro modelo: en Gemini el cupo es por modelo.
+class Quota extends AiError {}
+
+// Última respuesta HTTP de una lectura (código y mensaje original), para el diagnóstico.
+let lastHttp = null;
+
 // Tiempo máximo de espera por intento de lectura.
 const AI_TIMEOUT_MS = 90000;
 // Esperas antes de cada reintento cuando el proveedor está saturado.
@@ -217,7 +223,43 @@ async function runWithRetry(run, req, onStep, name) {
 // ---------------------------------------------------------------- Entrada principal
 
 // Envía los archivos a la IA elegida y devuelve { movimientos, nota }.
-export async function extractWithAI(files, mode, onStep = () => {}, { account = '' } = {}) {
+// Cada lectura queda registrada (sin contenido) para el diagnóstico de IA.
+export async function extractWithAI(files, mode, onStep = () => {}, opts = {}) {
+  const entry = {
+    at: Date.now(), provider: currentProvider().name, model: currentModel(), mode,
+    files: files.map((f) => `${f.type || f.name.split('.').pop()} ${Math.round(f.size / 1024)} KB`).join(', '),
+  };
+  lastHttp = null;
+  try {
+    const result = await extractInner(files, mode, onStep, opts);
+    logAi({ ...entry, ok: true, ms: Date.now() - entry.at, detail: `${(result.movimientos || []).length} movimiento(s)${result.modelChanged ? ` · con ${result.modelChanged.to}` : ''}` });
+    return result;
+  } catch (err) {
+    logAi({ ...entry, ok: false, ms: Date.now() - entry.at, detail: describeError(err) });
+    throw err;
+  }
+}
+
+function logAi(entry) {
+  state.settings.aiLog = [entry, ...(state.settings.aiLog || [])].slice(0, 6);
+  save();
+}
+
+// Texto de un error con el código y el mensaje original del proveedor, sin la clave.
+export function describeError(err) {
+  const base = `${err?.constructor?.name && err.constructor.name !== 'AiError' && err.constructor.name !== 'Error' ? `${err.constructor.name}: ` : ''}${err?.message || err}`;
+  if (!lastHttp) return base;
+  const key = apiKey();
+  let raw = String(lastHttp.body || '');
+  try {
+    const e = JSON.parse(raw).error;
+    if (e) raw = [e.status || e.code || e.type, e.message].filter(Boolean).join(' · ');
+  } catch { /* no es JSON: se muestra tal cual */ }
+  if (key) raw = raw.split(key).join('••••');
+  return `${base}\n[HTTP ${lastHttp.status}] ${raw}`.trim();
+}
+
+async function extractInner(files, mode, onStep, { account = '' } = {}) {
   const parts = [];
   for (let i = 0; i < files.length; i++) {
     onStep(`Preparando ${i + 1} de ${files.length}…`);
@@ -235,9 +277,9 @@ export async function extractWithAI(files, mode, onStep = () => {}, { account = 
   } catch (err) {
     const gone = err instanceof ModelGone;
     // Tras un tiempo agotado no se prueba otro modelo: serían otros 90 s de espera.
-    if (!gone && !(err instanceof Busy && !err.timeout)) throw err;
+    if (!gone && !(err instanceof Busy && !err.timeout) && !(err instanceof Quota)) throw err;
     // Modelo retirado o saturado: se prueba una vez con otro modelo disponible para esta clave.
-    onStep(gone ? `El modelo ${req.model} ya no está disponible. Buscando otro…` : `${p.name} sigue sin responder. Probando con otro modelo…`);
+    onStep(gone ? `El modelo ${req.model} ya no está disponible. Buscando otro…` : err instanceof Quota ? `Se agotó el cupo de ${req.model}. Probando con otro modelo…` : `${p.name} sigue sin responder. Probando con otro modelo…`);
     const models = await listModels(p.id).catch(() => []);
     const others = models.filter((m) => m.id !== req.model);
     // Ante saturación se prefiere un modelo que no sea "pro" (tienen límites más bajos).
@@ -248,13 +290,13 @@ export async function extractWithAI(files, mode, onStep = () => {}, { account = 
       state.settings.models = { ...state.settings.models, [p.id]: best.id };
       save();
     }
-    modelChanged = { from: req.model, to: best.name, reason: gone ? 'gone' : 'busy' };
+    modelChanged = { from: req.model, to: best.name, reason: gone ? 'gone' : err instanceof Quota ? 'quota' : 'busy' };
     onStep(`Leyendo con ${best.name}…`);
     try {
       text = await run({ ...req, model: best.id });
     } catch (err2) {
-      // Si el respaldo también está saturado, se muestra el mensaje original.
-      throw err2 instanceof Busy ? err : err2;
+      // Si el respaldo también está saturado o sin cupo, se muestra el mensaje original.
+      throw err2 instanceof Busy || err2 instanceof Quota ? err : err2;
     }
   }
   let result;
@@ -300,6 +342,8 @@ async function viaAnthropic({ system, parts, ask, model, key }) {
       else throw err;
     }
   } catch (err) {
+    lastHttp = { status: err.status ?? 'sin código', body: String(err.message || '').slice(0, 400) };
+    if (err instanceof Anthropic.RateLimitError) throw new Quota('Demasiadas solicitudes seguidas o sin saldo en Anthropic. Espera un momento y vuelve a intentar.');
     if (err instanceof Anthropic.AuthenticationError) throw new AiError('La clave de Anthropic no es válida. Revísala en Ajustes.');
     if (err instanceof Anthropic.PermissionDeniedError) throw new AiError('Tu clave no tiene permiso para este modelo.');
     if (err instanceof Anthropic.RateLimitError) throw new AiError('Demasiadas solicitudes seguidas. Espera un momento y vuelve a intentar.');
@@ -351,7 +395,7 @@ async function viaGemini({ system, parts, ask, model, key }) {
     if (res.status === 400 && /api key/i.test(msg)) throw new AiError('La clave de Google no es válida. Revísala en Ajustes.');
     if (res.status === 403) throw new AiError('Tu clave de Google no tiene permiso para este modelo.');
     if (res.status === 404) throw new ModelGone(`El modelo “${model}” no está disponible para tu clave${msg ? ` (${msg})` : ''}. Elige otro en Ajustes → Modelo.`);
-    if (res.status === 429) throw new AiError('Llegaste al límite de uso de Gemini (el nivel gratuito tiene un tope por minuto y por día). Espera un poco.');
+    if (res.status === 429) throw new Quota(`Llegaste al límite de uso de ${model} (el nivel gratuito tiene un tope por minuto y por día). Espera un poco o elige otro modelo en Ajustes → Modelo.`);
     if (res.status >= 500) throw new Busy(busyMessage('Gemini'));
     throw new AiError(`Error de Gemini (${res.status})${msg ? `: ${msg}` : ''}`);
   }
@@ -389,7 +433,7 @@ async function viaOpenAI({ system, parts, ask, model, key }) {
     if (res.status === 403) throw new AiError('Tu clave de OpenAI no tiene permiso para este modelo.');
     if (res.status === 404 || data.error?.code === 'model_not_found') throw new ModelGone(`El modelo “${model}” no está disponible para tu clave. Elige otro en Ajustes → Modelo.`);
     if (res.status >= 500) throw new Busy(busyMessage('OpenAI'));
-    if (res.status === 429) throw new AiError(data.error?.code === 'insufficient_quota' ? 'Tu cuenta de OpenAI no tiene saldo.' : 'Demasiadas solicitudes seguidas. Espera un momento.');
+    if (res.status === 429) throw new Quota(data.error?.code === 'insufficient_quota' ? 'Tu cuenta de OpenAI no tiene saldo.' : 'Demasiadas solicitudes seguidas. Espera un momento.');
     throw new AiError(`Error de OpenAI (${res.status})${msg ? `: ${msg}` : ''}`);
   }
   const choice = data.choices?.[0];
@@ -466,6 +510,82 @@ export async function ensureModel(providerId) {
   return { from: current, to: models[0].name };
 }
 
+// ---------------------------------------------------------------- Diagnóstico
+
+// Imagen de prueba: un ticket inventado dibujado en un canvas (no usa datos del usuario).
+function testImage() {
+  const c = document.createElement('canvas');
+  c.width = 360; c.height = 200;
+  const g = c.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+  g.fillStyle = '#000'; g.font = 'bold 22px sans-serif';
+  g.fillText('OXXO TIENDA 123', 20, 40);
+  g.font = '18px sans-serif';
+  g.fillText('01/11/2026  10:32', 20, 80);
+  g.fillText('Refresco 600ml      $25.00', 20, 115);
+  g.font = 'bold 22px sans-serif';
+  g.fillText('TOTAL  $25.00 MXN', 20, 165);
+  return c.toDataURL('image/jpeg', 0.85).split(',')[1];
+}
+
+// Corre pruebas con datos inventados y avisa el avance con onUpdate(steps).
+// Cada paso: { label, state: 'run' | 'ok' | 'fail', detail, ms }.
+export async function runDiagnostic(onUpdate = () => {}) {
+  const p = currentProvider();
+  const model = currentModel();
+  const steps = [];
+  const step = async (label, fn) => {
+    const s = { label, state: 'run', detail: '' };
+    steps.push(s);
+    onUpdate(steps);
+    const t = performance.now();
+    lastHttp = null;
+    try {
+      s.detail = (await fn()) || '';
+      s.state = 'ok';
+    } catch (err) {
+      s.state = 'fail';
+      s.detail = describeError(err);
+    }
+    s.ms = Math.round(performance.now() - t);
+    onUpdate(steps);
+    return s.state === 'ok';
+  };
+  if (!apiKey()) {
+    await step('Clave', async () => { throw new AiError('No hay clave guardada para este proveedor.'); });
+    return steps;
+  }
+  if (!(await step('Clave', async () => { await testConnection(p.id); return 'Válida'; }))) return steps;
+  let models = [];
+  await step('Modelo elegido disponible', async () => {
+    models = await listModels(p.id);
+    if (models.length && !models.some((m) => m.id === model)) throw new AiError(`“${model}” no está entre los ${models.length} modelos de tu clave.`);
+    return `${models.length} modelos disponibles; “${model}” está entre ellos`;
+  });
+  const run = { anthropic: viaAnthropic, google: viaGemini, openai: viaOpenAI }[p.id];
+  const base = { system: systemPrompt('batch', ''), key: apiKey() };
+  const read = async (m, parts, ask) => {
+    const r = JSON.parse(await run({ ...base, model: m, parts, ask }));
+    const first = (r.movimientos || [])[0];
+    return `Leyó ${(r.movimientos || []).length} movimiento(s)${first ? `: ${first.comercio} ${first.monto} ${first.moneda}` : ''}`;
+  };
+  const textPart = [{ kind: 'text', text: 'Archivo prueba.csv:\nFecha,Comercio,Monto\n2026-11-01,OXXO,50.00' }];
+  const imgPart = [{ kind: 'image', mime: 'image/jpeg', data: testImage() }];
+  const okText = await step(`Lectura de texto con ${model}`, () => read(model, textPart, 'Lee todos los movimientos de este archivo.'));
+  const okImg = await step(`Lectura de imagen con ${model}`, () => read(model, imgPart, 'Lee este recibo.'));
+  if (!okText || !okImg) {
+    const alt = models.find((m) => m.id !== model && !/pro/.test(m.id));
+    if (alt) await step(`Lectura de imagen con ${alt.id} (otro modelo)`, () => read(alt.id, imgPart, 'Lee este recibo.'));
+  }
+  return steps;
+}
+
+// Forma de la clave guardada (inicio y largo), sin mostrarla.
+export function keyShape() {
+  const k = apiKey();
+  return k ? `${k.slice(0, 4)}… · ${k.length} caracteres` : 'sin clave';
+}
+
 // ---------------------------------------------------------------- Probar conexión
 
 // Consulta la lista de modelos del proveedor: valida la clave sin costo de uso.
@@ -507,9 +627,14 @@ async function safeFetch(url, opts, timeoutMs = 0) {
     const res = await fetch(url, { ...opts, signal: ctrl.signal });
     // El cuerpo también se lee dentro del tiempo límite.
     const body = await res.text();
+    lastHttp = { status: res.status, body: res.ok ? 'OK' : body.slice(0, 600) };
     return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
-  } catch {
-    if (ctrl.signal.aborted) throw new Busy(timeoutMessage(), { timeout: true });
+  } catch (err) {
+    if (ctrl.signal.aborted) {
+      lastHttp = { status: 'sin respuesta', body: `Se canceló a los ${timeoutMs / 1000} s` };
+      throw new Busy(timeoutMessage(), { timeout: true });
+    }
+    lastHttp = { status: 'red', body: String(err?.message || err) };
     throw new AiError('Sin conexión con el servicio de IA.');
   } finally {
     clearTimeout(timer);

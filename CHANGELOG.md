@@ -3,6 +3,19 @@
 Todos los cambios notables de este proyecto se documentan aquí.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/); versionado según [SemVer](https://semver.org/lang/es/).
 
+## [0.5.2] - 2026-11-12
+
+### Añadido
+- **Diagnóstico de IA** en Ajustes → Inteligencia artificial.
+  - Hace lecturas de prueba (texto e imagen) con un ticket inventado, sin enviar tus datos.
+  - Muestra el código y el mensaje original del proveedor, el tiempo de respuesta, y si otro modelo sí funciona.
+  - Incluye las últimas 6 lecturas reales (tipo y tamaño de archivo, modelo, resultado y error), sin su contenido.
+  - "Copiar resultado" copia todo como texto. La clave nunca se muestra: solo su inicio y su largo.
+- Los mensajes de error de lectura sugieren abrir el diagnóstico.
+
+### Cambiado
+- Si se agota el cupo de un modelo (429), la app prueba una vez con otro modelo, porque en Gemini el cupo gratuito es por modelo. No reintenta con el mismo.
+
 ## [0.5.1] - 2026-11-12
 
 ### Corregido

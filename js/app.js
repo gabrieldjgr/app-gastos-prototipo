@@ -20,7 +20,7 @@ import {
 import { loadSampleData } from './sample.js';
 import {
   hasApiKey, extractWithAI, extractDemo, AiError, PROVIDERS, providerById, currentProvider, currentModel, modelLabel, testConnection,
-  listModels, ensureModel, modelsFor,
+  listModels, ensureModel, modelsFor, runDiagnostic, keyShape,
 } from './ai.js';
 import { openImageEditor } from './imageeditor.js';
 import { APP_VERSION, APP_FILES } from './version.js';
@@ -1305,7 +1305,7 @@ function openReceipt() {
     } catch (err) {
       console.error(err);
       sheet.body.querySelector('.shimmer')?.remove();
-      zone.insertAdjacentHTML('afterend', `<p class="error-box">😕 ${esc(err instanceof AiError ? err.message : 'Ocurrió un error inesperado.')}</p>
+      zone.insertAdjacentHTML('afterend', `<p class="error-box">😕 ${esc(err instanceof AiError ? err.message : 'Ocurrió un error inesperado.')}<small>Si se repite, revisa Ajustes → Diagnóstico de IA.</small></p>
         <div class="btn-row two-btn"><button class="btn ghost" data-r="other">Elegir otro</button><button class="btn primary" data-r="read">Intentar de nuevo</button></div>`);
     }
   };
@@ -1405,7 +1405,7 @@ function openBatch({ account: preset = '' } = {}) {
       else if (result.nota) toast(result.nota);
     } catch (err) {
       console.error(err);
-      prog.innerHTML = `<p class="error-box">😕 ${esc(err instanceof AiError ? err.message : 'Ocurrió un error inesperado al leer los archivos.')}</p>`;
+      prog.innerHTML = `<p class="error-box">😕 ${esc(err instanceof AiError ? err.message : 'Ocurrió un error inesperado al leer los archivos.')}<small>Si se repite, revisa Ajustes → Diagnóstico de IA.</small></p>`;
       btn.disabled = false;
       btn.textContent = 'Intentar de nuevo';
     }
@@ -1633,6 +1633,7 @@ function openSettings() {
           <div class="key-actions"><button class="btn ghost sm" data-act="test" ${hasApiKey(p.id) ? '' : 'disabled'}>Probar conexión</button><span class="muted small">Obtén tu clave en <b>${esc(p.keyUrl)}</b></span></div>
         </div>
         <button class="set-row" data-act="model"><span>Modelo</span><b>${esc(modelLabel(p.id, currentModel()))}</b>${icon('chevron')}</button>
+        <button class="set-row" data-act="diag"><span class="grow">Diagnóstico de IA<small>Prueba con datos inventados y muestra la respuesta exacta del proveedor</small></span>${icon('chevron')}</button>
       </div>
       <p class="privacy-note ${p.id === 'google' ? 'warn' : ''}">${p.id === 'google' ? '⚠️ ' : ''}${esc(p.privacy)}</p>
       <p class="hint">Tus claves se guardan solo en este dispositivo y las imágenes van directo al proveedor que elijas. No uses este prototipo en un equipo compartido.</p>
@@ -1718,6 +1719,7 @@ function openSettings() {
       } catch (err) { conn[id] = err instanceof AiError ? err.message : 'Error'; }
       draw();
     }
+    if (act === 'diag') openAiDiagnostic();
     if (act === 'methods') openPaymentMethods(draw);
     if (act === 'notices') openNoticeSettings(draw);
     if (act === 'categories') openCategories(draw);
@@ -1861,9 +1863,63 @@ function openCustomize() {
 
 // Aviso cuando la lectura usó otro modelo: permanente si el anterior fue retirado, solo esta vez si estaba saturado.
 function modelChangedMsg(c) {
+  if (c.reason === 'quota') return `Se agotó el cupo de “${c.from}”: esta vez leí con ${c.to}.`;
   return c.reason === 'busy'
     ? `“${c.from}” estaba saturado: esta vez leí con ${c.to}.`
     : `Cambié a ${c.to}: “${c.from}” ya no está disponible.`;
+}
+
+// ---------------------------------------------------------------- Diagnóstico de IA
+
+// Pruebas con datos inventados y registro de las últimas lecturas reales, listos para compartir en una captura.
+function openAiDiagnostic() {
+  const sheet = openSheet({ title: 'Diagnóstico de IA', full: true, body: '' });
+  const p = currentProvider();
+  let steps = [];
+  let running = false;
+  const when = (t) => new Date(t).toLocaleString('es-MX', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  const secs = (ms) => (ms == null ? '' : `${(ms / 1000).toFixed(1)} s`);
+  const mark = (st) => (st === 'ok' ? '✅' : st === 'fail' ? '❌' : '<span class="spinner"></span>');
+  const log = () => state.settings.aiLog || [];
+  const draw = () => sheet.setBody(`
+    <p class="hint">Hace lecturas de prueba con un ticket inventado (no envía tus gastos ni tus capturas) y muestra la respuesta tal como la da ${esc(p.company)}. Tu clave no aparece aquí: puedes compartir una captura de esta pantalla.</p>
+    <div class="card list-card">
+      <div class="set-row"><span class="grow">App</span><b>v${APP_VERSION}</b></div>
+      <div class="set-row"><span class="grow">Proveedor</span><b>${esc(p.name)}</b></div>
+      <div class="set-row"><span class="grow">Modelo</span><b>${esc(currentModel())}</b></div>
+      <div class="set-row"><span class="grow">Clave guardada</span><b>${esc(keyShape())}</b></div>
+    </div>
+    <h3 class="group-title">Pruebas</h3>
+    <div class="card diag-list">${steps.length ? steps.map((s) => `
+      <div class="diag-item ${s.state}"><span class="diag-mark">${mark(s.state)}</span><b>${esc(s.label)}</b><small>${secs(s.ms)}</small>
+        ${s.detail ? `<pre class="diag-detail">${esc(s.detail)}</pre>` : ''}</div>`).join('') : '<p class="hint diag-empty">Toca "Probar" para empezar.</p>'}</div>
+    <h3 class="group-title">Últimas lecturas reales</h3>
+    <div class="card diag-list">${log().length ? log().map((l) => `
+      <div class="diag-item ${l.ok ? 'ok' : 'fail'}"><span class="diag-mark">${l.ok ? '✅' : '❌'}</span><b>${esc(when(l.at))} · ${esc(l.model)}</b><small>${secs(l.ms)}</small>
+        <pre class="diag-detail">${esc(`${l.files}\n${l.detail}`)}</pre></div>`).join('') : '<p class="hint diag-empty">Aún no hay lecturas registradas. Se guardan desde esta versión.</p>'}</div>
+    <div class="btn-row two-btn diag-actions"><button class="btn ghost" data-d="copy" ${running ? 'disabled' : ''}>Copiar resultado</button><button class="btn primary" data-d="run" ${running ? 'disabled' : ''}>${running ? 'Probando…' : steps.length ? 'Repetir' : 'Probar'}</button></div>`);
+  const report = () => [
+    `Ritmo v${APP_VERSION} · ${p.name} · ${currentModel()} · clave ${keyShape()}`,
+    '', 'Pruebas:', ...steps.map((s) => `${s.state === 'ok' ? 'OK ' : 'ERR'} ${s.label} (${secs(s.ms)})\n    ${s.detail.replace(/\n/g, '\n    ')}`),
+    '', 'Últimas lecturas:', ...log().map((l) => `${l.ok ? 'OK ' : 'ERR'} ${when(l.at)} ${l.model} (${secs(l.ms)}) [${l.files}]\n    ${l.detail.replace(/\n/g, '\n    ')}`),
+  ].join('\n');
+  const start = async () => {
+    running = true;
+    steps = [];
+    draw();
+    await runDiagnostic((s) => { steps = s; draw(); });
+    running = false;
+    draw();
+  };
+  sheet.el.addEventListener('click', async (e) => {
+    const d = e.target.closest('[data-d]')?.dataset.d;
+    if (d === 'run' && !running) start();
+    if (d === 'copy') {
+      try { await navigator.clipboard.writeText(report()); toast('Resultado copiado'); } catch { toast('No pude copiar; toma una captura de pantalla'); }
+    }
+  });
+  draw();
+  if (hasApiKey(p.id)) start();
 }
 
 // ---------------------------------------------------------------- Actualizaciones
