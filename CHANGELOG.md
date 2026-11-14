@@ -3,6 +3,19 @@
 Todos los cambios notables de este proyecto se documentan aquí.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/); versionado según [SemVer](https://semver.org/lang/es/).
 
+## [0.9.0] - 2026-11-13
+
+### Añadido
+- **Cortes de tarjeta en Gastos.** Al filtrar una sola tarjeta de crédito con día de corte, arriba de la lista aparece su estado de cuenta:
+  - **Último corte:** el que se paga. Muestra el total, la fecha en que cerró y cuándo se paga ("paga el 15 nov, en 2 días").
+  - **En curso:** lo que llevas en el corte abierto y en cuántos días cierra.
+  - **Anteriores:** lista de cortes pasados con su total.
+  - Avisa si hay movimientos de ese corte por revisar, porque aún no cuentan en el total.
+  - El día de corte cuenta en el corte que cierra ese día. Se ajusta en meses cortos: un corte el 31 cae el 28 o 29 en febrero.
+- El filtro **Período** ofrece los cortes de la tarjeta filtrada.
+- Si la tarjeta no tiene día de corte, un aviso permite agregarlo ahí mismo.
+- El aviso de pago de tarjeta en Inicio ("Ver gastos") abre directo el **último corte** de esa tarjeta, con el mismo total del aviso.
+
 ## [0.8.0] - 2026-11-13
 
 ### Añadido

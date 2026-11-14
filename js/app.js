@@ -12,6 +12,7 @@ import {
 import { budgetStats, budgetWindow } from './budget.js';
 import {
   periodOf, periodRange, shiftPeriod, isCurrent, periodLabel, switchMode, compareRange, sumIn, budgetStatsFor, firstExpenseDate,
+  statementRange,
 } from './period.js';
 import {
   paceCard, ghostPace, prepareDraw, attachPaceTouch, categoryBars, trendBars, costCenterRows,
@@ -370,7 +371,7 @@ async function noticeDo(key, act) {
     rerender();
     return;
   }
-  if (c.type === 'due' && act === 'view') { resolveNotice(key, 'acted'); view.filters = { ...view.filters, cats: [], ccs: [], methods: [c.method.name], q: '', period: '90' }; switchTab('expenses'); }
+  if (c.type === 'due' && act === 'view') { resolveNotice(key, 'acted'); view.filters = { ...view.filters, cats: [], ccs: [], methods: [c.method.name], q: '', period: '90' }; if (c.method.cutDay) applyStatement(c.method, -1, false); switchTab('expenses'); }
   if (c.type === 'pace' && act === 'view') { resolveNotice(key, 'acted'); openBudgetDetail(c.budget.id); }
   if (c.type === 'period' && act === 'edit') { resolveNotice(key, 'done'); if (c.budget.groupId) openPlanEditor({ groupId: c.budget.groupId }); else openBudgetEditor(c.budget); }
   if (c.type === 'stale' && act === 'import') { resolveNotice(key, 'acted'); openBatch({ account: c.method?.name || '' }); }
@@ -517,10 +518,12 @@ function renderExpenseList() {
   const host = document.getElementById('exp-list');
   if (!host) return;
   const list = filteredExpenses();
+  const stmt = statementBarHTML();
   if (!list.length) {
     host.innerHTML = state.expenses.length
       ? emptyState('🔍', 'Nada por aquí', 'No hay gastos con estos filtros.')
       : emptyState('🧾', 'Aún no hay gastos', 'Sube una captura de tu banco o agrega tu primer gasto.', '<button class="btn primary" data-action="add-menu">Agregar gasto</button>');
+    if (stmt) host.insertAdjacentHTML('afterbegin', stmt);
     return;
   }
   const groups = new Map();
@@ -544,7 +547,7 @@ function renderExpenseList() {
   }
   const total = list.reduce((s, e) => s + e.amountBase, 0);
   html += `<p class="list-foot">${list.length} ${list.length === 1 ? 'gasto' : 'gastos'} · <b class="num">${money(total)}</b>${methodBreakdown(list)}</p>`;
-  host.innerHTML = html;
+  host.innerHTML = stmt + html;
   host.classList.toggle('selecting', view.selecting);
   if (!view.selecting) {
     host.querySelectorAll('.row.swipe').forEach((row) => {
@@ -553,6 +556,88 @@ function renderExpenseList() {
     });
   }
   updateSelectionBar();
+}
+
+// ---------------------------------------------------------------- Cortes de tarjeta
+
+// Tarjeta de crédito filtrada sola (para ofrecer sus cortes).
+function filteredCard() {
+  const f = view.filters;
+  if (f.methods.length !== 1) return null;
+  const m = state.paymentMethods.find((x) => x.name === f.methods[0]);
+  return m && m.type === 'credito' ? m : null;
+}
+
+function statementName(o) {
+  return o === 0 ? 'Corte en curso' : o === -1 ? 'Último corte' : 'Corte anterior';
+}
+
+function statementOption(card, o) {
+  const s = statementRange(card, o);
+  const total = sumIn(confirmed(), s.startISO, s.endISO, (e) => e.paymentMethod === card.name);
+  return { value: `stmt:${o}`, label: `${statementName(o)} · ${s.label}`, emoji: o === 0 ? '🟢' : o === -1 ? '🧾' : '📄', color: 6, hint: `${money(total, undefined, { hero: true })}${o === -1 && s.due ? ` · paga el ${dateShort(s.due)}` : ''}` };
+}
+
+// Filtra Gastos por un corte de la tarjeta (solo esa tarjeta).
+function applyStatement(card, offset, render = true) {
+  const s = statementRange(card, offset);
+  if (!s) return;
+  const f = view.filters;
+  f.methods = [card.name];
+  f.period = 'range';
+  f.from = s.startISO;
+  f.to = s.endISO;
+  f.rangeLabel = `Corte ${s.label}`;
+  f.stmt = offset;
+  if (render) rerender();
+}
+
+// Con una tarjeta de crédito filtrada sola: total del corte, fechas de cierre y pago, y atajos.
+function statementBarHTML() {
+  const card = filteredCard();
+  if (!card || view.selecting) return '';
+  if (!card.cutDay) {
+    return `<div class="card stmt-bar hint-card"><span>💳</span><p>Agrega el <b>día de corte</b> de ${esc(card.name)} para ver sus estados de cuenta.</p>
+      <button class="btn ghost sm" data-action="stmt-edit-card">Agregar</button></div>`;
+  }
+  const f = view.filters;
+  const active = f.period === 'range' && f.stmt !== undefined ? f.stmt : null;
+  const seg = `<div class="seg small stmt-seg">
+      <button class="${active === -1 ? 'on' : ''}" data-action="stmt" data-o="-1">Último corte</button>
+      <button class="${active === 0 ? 'on' : ''}" data-action="stmt" data-o="0">En curso</button>
+      <button class="${active !== null && active < -1 ? 'on' : ''}" data-action="stmt-more">Anteriores</button>
+    </div>`;
+  if (active === null) return `<div class="card stmt-bar"><p class="stmt-title">Estados de cuenta de ${esc(card.name)}</p>${seg}</div>`;
+  const s = statementRange(card, active);
+  const exp = confirmed();
+  const total = sumIn(exp, s.startISO, s.endISO, (e) => e.paymentMethod === card.name);
+  const pend = pending().filter((e) => e.paymentMethod === card.name && e.date >= s.startISO && e.date < s.endISO).length;
+  const today = parseISO(todayISO());
+  const daysTo = (d) => Math.round((d - today) / 86400000);
+  let when;
+  if (s.open) {
+    const left = daysTo(s.close);
+    when = `Cierra ${left === 0 ? 'hoy' : left === 1 ? 'mañana' : `el ${dateShort(s.close)} (en ${left} días)`}`;
+  } else {
+    when = `Cerró el ${dateShort(s.close)}`;
+    if (s.due) {
+      const left = daysTo(s.due);
+      when += left > 0 ? ` · paga el ${dateShort(s.due)} (en ${left} ${left === 1 ? 'día' : 'días'})` : left === 0 ? ' · <b>se paga hoy</b>' : ` · se pagaba el ${dateShort(s.due)}`;
+    }
+  }
+  return `<div class="card stmt-bar ${s.open ? '' : 'closed'}">
+    <div class="stmt-head"><span class="overline">${statementName(active)} · ${esc(s.label)}</span>
+      <span class="stmt-total num">${heroMoney(total)}</span>
+      <span class="stmt-when">${when}</span>
+      ${pend ? `<button class="stmt-pend" data-action="tab" data-tab="review">📥 ${pend} ${pend === 1 ? 'movimiento' : 'movimientos'} de este corte por revisar</button>` : ''}
+    </div>${seg}</div>`;
+}
+
+async function pickStatement() {
+  const card = filteredCard();
+  if (!card?.cutDay) return;
+  const v = await pick({ title: `Cortes de ${card.name}`, options: [0, -1, -2, -3, -4, -5, -6].map((o) => statementOption(card, o)), selected: view.filters.stmt !== undefined ? `stmt:${view.filters.stmt}` : null });
+  if (v) applyStatement(card, Number(v.slice(5)));
 }
 
 // Con varios medios filtrados, el pie desglosa el total por medio.
@@ -718,7 +803,14 @@ async function deleteExpense(id, rowEl) {
 async function chooseFilter(key) {
   const f = view.filters;
   let value;
-  if (key === 'period') value = await pick({ title: 'Período', options: f.period === 'range' ? [{ value: 'range', label: f.rangeLabel }, ...PERIOD_FILTERS] : PERIOD_FILTERS, selected: f.period });
+  if (key === 'period') {
+    const card = filteredCard();
+    const cuts = card?.cutDay ? [0, -1, -2, -3].map((o) => statementOption(card, o)) : [];
+    const custom = f.period === 'range' && f.stmt === undefined ? [{ value: 'range', label: f.rangeLabel }] : [];
+    value = await pick({ title: 'Período', options: [...cuts, ...custom, ...PERIOD_FILTERS], selected: f.stmt !== undefined && f.period === 'range' ? `stmt:${f.stmt}` : f.period });
+    if (typeof value === 'string' && value.startsWith('stmt:')) { applyStatement(card, Number(value.slice(5))); return; }
+    if (value !== undefined && value !== 'range') delete f.stmt;
+  }
   if (key === 'cats') value = await multiPick({ title: 'Categorías', options: visibleCategories().map((c) => ({ value: c.id, label: c.name, emoji: c.emoji, color: c.color })), selected: f.cats });
   if (key === 'ccs') value = await multiPick({ title: 'Centros de costo', options: state.costCenters.map((c) => ({ value: c.id, label: c.name, emoji: c.emoji })), selected: f.ccs });
   if (key === 'methods') {
@@ -2470,6 +2562,9 @@ function onClick(e) {
     'toggle-select': () => toggleSelected(id),
     'select-day': () => toggleDay(el.dataset.date),
     bulk: () => bulkAction(el.dataset.do),
+    stmt: () => { const card = filteredCard(); if (card) applyStatement(card, Number(el.dataset.o)); },
+    'stmt-more': pickStatement,
+    'stmt-edit-card': async () => { const card = filteredCard(); if (card && (await openMethodEditor(card))) rerender(); },
     confirm: () => confirmPending(id),
     discard: () => discardPending(id),
     answer: () => { updateExpense(id, { categoryId: el.dataset.cat }); confirmPending(id); },

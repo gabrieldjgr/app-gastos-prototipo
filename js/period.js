@@ -94,3 +94,32 @@ export function firstExpenseDate(expenses) {
   for (const e of expenses) if (e.status === 'confirmed' && (!min || e.date < min)) min = e.date;
   return min;
 }
+
+// ---------------------------------------------------------------- Cortes de tarjeta
+
+// Día d del mes m (si el mes es más corto, el último día). m puede salirse de 0–11.
+function dayIn(y, m, d) {
+  const last = new Date(y, m + 1, 0).getDate();
+  return new Date(y, m, Math.min(d, last));
+}
+
+// Corte (estado de cuenta) de una tarjeta de crédito con día de corte.
+// offset 0 = el corte en curso (cierra hoy o después); -1 = el último cerrado (el que se paga); -2, -3… anteriores.
+// El día de corte pertenece al corte que cierra ese día.
+export function statementRange(method, offset = 0, ref = new Date()) {
+  const cut = Number(method.cutDay);
+  if (!cut) return null;
+  const today = startOfDay(ref);
+  const k = dayIn(today.getFullYear(), today.getMonth(), cut) < today ? 1 : 0;
+  const closeOf = (i) => dayIn(today.getFullYear(), today.getMonth() + k + i, cut);
+  const close = closeOf(offset);
+  const start = addDays(closeOf(offset - 1), 1);
+  const end = addDays(close, 1);
+  let due = null;
+  const pay = Number(method.payDay);
+  if (pay) {
+    due = dayIn(close.getFullYear(), close.getMonth(), pay);
+    if (due <= close) due = dayIn(close.getFullYear(), close.getMonth() + 1, pay);
+  }
+  return { start, end, startISO: toISO(start), endISO: toISO(end), close, due, open: offset >= 0, offset, label: dateRange(start, end) };
+}

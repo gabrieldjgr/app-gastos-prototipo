@@ -1,1 +1,1 @@
-{"version":"0.8.0","date":"2026-11-13","notes":["Filtra Gastos por varias tarjetas, centros o categorías (y por \"sin medio de pago\")","Selecciona varios gastos y cambia su tarjeta, centro o categoría de un jalón"]}
+{"version":"0.9.0","date":"2026-11-13","notes":["Cortes de tarjeta en Gastos: total del último corte, fecha de pago y corte en curso","El aviso de pago de tarjeta abre directo el corte por pagar"]}
