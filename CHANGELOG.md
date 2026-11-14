@@ -3,6 +3,18 @@
 Todos los cambios notables de este proyecto se documentan aquí.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/); versionado según [SemVer](https://semver.org/lang/es/).
 
+## [0.10.0] - 2026-11-13
+
+### Añadido
+- **Presupuesto en "Por categoría" (Inicio).** Las categorías con presupuesto muestran "$2,368 de $2,200":
+  - una barra de avance de color: verde en ritmo, amarillo adelantado al ritmo o cerca del tope, rojo excedido;
+  - en el período en curso, la marca de dónde deberías ir hoy;
+  - "Quedan $1,761" o "Te pasaste $168".
+- Si el presupuesto es de un centro de costo (por ejemplo, "Día a día"), la barra cuenta solo los gastos de ese centro. Los de otros centros aparecen aparte: "+$2,810 fuera de Día a día".
+- Las categorías con presupuesto se muestran siempre, aunque aún no tengan gastos.
+- Viendo una semana con presupuestos mensuales, el monto se ajusta a la semana y se marca con "≈".
+- El pie suma lo gastado contra lo presupuestado en todas las categorías con presupuesto.
+
 ## [0.9.0] - 2026-11-13
 
 ### Añadido

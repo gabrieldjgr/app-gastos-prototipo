@@ -1,7 +1,7 @@
 // Gráficos hechos a mano en SVG/HTML: ritmo de presupuesto, barras por categoría, evolución, etc.
 import { money, moneyShort, dateShort, addDays, esc, toISO, parseISO, monthName, dateRange } from './format.js';
 import { categoryById, costCenterById, state, confirmed } from './store.js';
-import { budgetStats } from './budget.js';
+import { budgetStats, budgetWindow } from './budget.js';
 import { periodOf, periodRange, shiftPeriod, isCurrent, samePeriod, periodLabel, periodShort, sumIn, budgetStatsFor } from './period.js';
 
 const W = 328;
@@ -246,37 +246,108 @@ export function deltaChip(total, prev, cmp) {
   return `<span class="delta ${pct > 0 ? 'up' : 'down'}" title="Antes: ${esc(money(prev, undefined, { hero: true }))}">${pct > 0 ? '▲' : '▼'} ${Math.abs(pct)} % vs ${esc(cmpName(cmp))}</span>`;
 }
 
+const DAY_MS = 86400000;
+
+// Presupuesto de una categoría para el rango elegido. Suma los presupuestos de esa categoría
+// (puede haber uno por centro de costo). Si el período del presupuesto no coincide con el elegido
+// (por ejemplo, presupuesto mensual viendo una semana), se prorratea por días y se marca como aproximado.
+// spent cuenta solo los gastos que entran en esos presupuestos (su centro de costo); outside, el resto.
+function categoryBudget(catId, r, exp) {
+  const list = state.budgets.filter((x) => x.categoryId === catId && Number(x.amount) > 0);
+  if (!list.length) return null;
+  const today = new Date();
+  const last = addDays(r.end, -1) > today ? today : addDays(r.end, -1);
+  const rangeDays = Math.round((r.end - r.start) / DAY_MS);
+  let amount = 0;
+  let approx = false;
+  for (const x of list) {
+    const w = budgetWindow(x, last);
+    const winDays = Math.max(1, Math.round((w.end - w.start) / DAY_MS));
+    if (toISO(w.start) === r.startISO && toISO(w.end) === r.endISO) { amount += Number(x.amount); continue; }
+    approx = true;
+    if (x.period === 'none') {
+      // Presupuesto por fechas: solo la parte que cae dentro del rango.
+      const from = Math.max(w.start, r.start);
+      const to = Math.min(w.end, r.end);
+      amount += to > from ? Number(x.amount) * ((to - from) / DAY_MS) / winDays : 0;
+    } else amount += Number(x.amount) * rangeDays / winDays;
+  }
+  if (amount <= 0) return null;
+  const allCenters = list.some((x) => !x.costCenterId);
+  const centers = new Set(list.map((x) => x.costCenterId));
+  let spent = 0;
+  let outside = 0;
+  for (const e of exp) {
+    if (e.categoryId !== catId || e.date < r.startISO || e.date >= r.endISO) continue;
+    if (allCenters || centers.has(e.costCenterId)) spent += e.amountBase; else outside += e.amountBase;
+  }
+  const names = allCenters ? '' : [...centers].map((id) => costCenterById(id)?.name).filter(Boolean).join(', ');
+  return { amount, approx, spent, outside, names };
+}
+
 export function categoryBars(ctx) {
   const { r, cmp, p } = ctx;
+  const exp = confirmed();
   const totals = {};
   const before = {};
-  for (const e of confirmed()) {
+  for (const e of exp) {
     if (e.date >= r.startISO && e.date < r.endISO) totals[e.categoryId] = (totals[e.categoryId] || 0) + e.amountBase;
     if (e.date >= cmp.startISO && e.date < cmp.endISO) before[e.categoryId] = (before[e.categoryId] || 0) + e.amountBase;
   }
+  // Las categorías con presupuesto se muestran siempre, aunque aún no tengan gastos.
+  const budgets = {};
+  for (const id of new Set(state.budgets.filter((x) => x.categoryId).map((x) => x.categoryId))) {
+    const bud = categoryBudget(id, r, exp);
+    if (bud) { budgets[id] = bud; if (!(id in totals)) totals[id] = 0; }
+  }
   const sorted = Object.entries(totals).sort((a, b) => b[1] - a[1]);
-  if (!sorted.length) return emptyWidget(`Sin gastos en ${periodLabel(p)}`);
-  const top = sorted.slice(0, 6).map(([id, v]) => [id, v, true]);
-  const rest = sorted.slice(6).reduce((s, [, v]) => s + v, 0);
+  if (!sorted.some(([, v]) => v > 0) && !Object.keys(budgets).length) return emptyWidget(`Sin gastos en ${periodLabel(p)}`);
+  // Hasta 6 categorías sin presupuesto; las demás van a "Otros".
+  const shown = [];
+  let rest = 0;
+  let free = 0;
+  for (const [id, v] of sorted) {
+    if (budgets[id]) shown.push([id, v, true]);
+    else if (free < 6) { shown.push([id, v, true]); free++; } else rest += v;
+  }
   if (rest > 0) {
     // "Otros" agrupa varias categorías: su comparación no tendría sentido.
-    const otros = top.find(([k]) => k === 'otros');
-    if (otros) { otros[1] += rest; otros[2] = false; } else top.push(['otros', rest, false]);
+    const otros = shown.find(([k]) => k === 'otros');
+    if (otros && !budgets.otros) { otros[1] += rest; otros[2] = false; } else shown.push(['otros-resto', rest, false]);
   }
-  const max = top[0][1];
+  const max = Math.max(...shown.filter(([id]) => !budgets[id]).map(([, v]) => v), 1);
   const total = sorted.reduce((s, [, v]) => s + v, 0);
   const prevTotal = Object.values(before).reduce((s, v) => s + v, 0);
-  return `<div class="bars">${top.map(([id, v, comparable]) => {
-    const c = categoryById(id);
+  // Muesca de "dónde deberías ir hoy" solo en el período en curso.
+  const elapsed = isCurrent(p) ? Math.min(1, (Math.round((new Date() - r.start) / DAY_MS) + 1) / Math.round((r.end - r.start) / DAY_MS)) : null;
+  const budTotal = Object.values(budgets).reduce((s, x) => s + x.amount, 0);
+  const budSpent = Object.values(budgets).reduce((s, x) => s + x.spent, 0);
+  const anyApprox = Object.values(budgets).some((x) => x.approx);
+  return `<div class="bars">${shown.map(([id, v, comparable]) => {
+    const c = id === 'otros-resto' ? { ...categoryById('otros'), name: 'Otras categorías' } : categoryById(id);
+    const bud = budgets[id];
+    if (bud) {
+      const pct = bud.spent / bud.amount;
+      const status = pct > 1 ? 'over' : elapsed !== null && pct > elapsed * 1.1 ? 'warn' : pct >= 0.9 ? 'warn' : 'ok';
+      const left = bud.amount - bud.spent;
+      return `<div class="bar-row budgeted" data-action="filter-category" data-id="${id}">
+        <span class="avatar sm" style="--cat:var(--c${c.color})">${c.emoji}</span>
+        <div class="bar-main"><div class="bar-label"><span>${esc(c.name)}</span><span class="num">${money(bud.spent, undefined, { hero: true })} <small>de ${bud.approx ? '≈' : ''}${money(bud.amount, undefined, { hero: true })}</small></span></div>
+        <div class="progress cat-progress"><div class="progress-fill ${status}" style="--w:${Math.min(100, pct * 100).toFixed(1)}%"></div>${elapsed !== null ? `<span class="notch" style="left:${(elapsed * 100).toFixed(1)}%" title="Dónde deberías ir hoy"></span>` : ''}</div>
+        <div class="bud-sub"><span class="${left < 0 ? 'txt-over' : ''}">${left < 0 ? `Te pasaste ${money(-left, undefined, { hero: true })}` : `Quedan ${money(left, undefined, { hero: true })}`}</span>${bud.outside > 0 ? `<span>+${money(bud.outside, undefined, { hero: true })} fuera de ${esc(bud.names)}</span>` : ''}</div></div>
+      </div>`;
+    }
     const prev = before[id] || 0;
     const diff = v - prev;
     const showDelta = comparable && prev > 0 && Math.abs(diff) / prev >= DELTA_MIN;
-    return `<div class="bar-row" data-action="filter-category" data-id="${id}">
+    return `<div class="bar-row" ${id === 'otros-resto' ? '' : `data-action="filter-category" data-id="${id}"`}>
       <span class="avatar sm" style="--cat:var(--c${c.color})">${c.emoji}</span>
       <div class="bar-main"><div class="bar-label"><span>${esc(c.name)}</span><span class="num">${showDelta ? `<small class="delta-mini ${diff > 0 ? 'up' : 'down'}">${diff > 0 ? '▲' : '▼'} ${moneyShort(Math.abs(diff))}</small> ` : ''}${money(v, undefined, { hero: true })}</span></div>
       <div class="bar-track"><div class="bar-fill" style="--w:${((v / max) * 100).toFixed(1)}%;background:var(--c${c.color})"></div></div></div>
     </div>`;
-  }).join('')}</div><p class="widget-foot">Total · <b class="num">${money(total, undefined, { hero: true })}</b> ${deltaChip(total, prevTotal, cmp)}</p>`;
+  }).join('')}</div>
+  <p class="widget-foot">Total · <b class="num">${money(total, undefined, { hero: true })}</b> ${deltaChip(total, prevTotal, cmp)}</p>
+  ${budTotal > 0 ? `<p class="widget-foot bud-foot">Con presupuesto: <b class="num">${money(budSpent, undefined, { hero: true })}</b> de ${anyApprox ? '≈' : ''}${money(budTotal, undefined, { hero: true })}${anyApprox ? `<br><small>≈ presupuesto ajustado a ${p.mode === 'week' ? 'una semana' : 'este período'}</small>` : ''}</p>` : ''}`;
 }
 
 // Número de períodos entre a y b (b posterior a a).
